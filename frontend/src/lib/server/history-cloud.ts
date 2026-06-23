@@ -155,7 +155,13 @@ function getDb(): D1Database | null {
 
 async function ensureSchema(db: D1Database) {
   if (schemaReady) return;
-  await db.exec(SCHEMA);
+  const statements = SCHEMA.split(";")
+    .map((statement) => statement.trim())
+    .filter(Boolean)
+    .map((statement) => db.prepare(statement));
+  for (let i = 0; i < statements.length; i += 20) {
+    await db.batch(statements.slice(i, i + 20));
+  }
   schemaReady = true;
 }
 

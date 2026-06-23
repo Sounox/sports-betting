@@ -1,12 +1,19 @@
 {
   "$schema": "./frontend/node_modules/wrangler/config-schema.json",
-  "name": "sportsbet-analyzer",
+  "name": "sports-betting",
   "main": "cloudflare-worker.ts",
   "compatibility_date": "2026-06-23",
   "compatibility_flags": ["nodejs_compat"],
   "ai": {
     "binding": "AI"
   },
+  "d1_databases": [
+    {
+      "binding": "SPORTSBET_DB",
+      "database_name": "sportsbet-history",
+      "database_id": "f1008fe1-c2a0-409b-980b-446e2670dab8"
+    }
+  ],
   "vars": {
     "PUBLIC_APP_URL": "https://sports-betting.abl-slancry.workers.dev"
   },
