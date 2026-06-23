@@ -58,6 +58,19 @@ export const api = {
 
   // Admin
   getStatus: () => apiFetch<SystemStatus>("/api/v1/admin/status"),
+  getHistoryStatus: () =>
+    apiFetch<HistoryStatus>("/api/v1/admin/history/status"),
+  createHistorySnapshot: (hours = 168) =>
+    apiFetch<HistorySnapshotResponse>(
+      `/api/v1/admin/history/snapshot?hours=${hours}`,
+      { method: "POST" },
+    ),
+  getEventHistory: (id: number, limit = 50) =>
+    apiFetch<EventHistoryResponse>(
+      `/api/v1/admin/history/events/${id}?limit=${limit}`,
+    ),
+  getPerformanceSummary: () =>
+    apiFetch<PerformanceSummary>("/api/v1/admin/performance/summary"),
   importCompetition: (code: string, season?: number) =>
     apiFetch(`/api/v1/admin/import/${code}${season ? `?season=${season}` : ""}`, { method: "POST" }),
   refreshOdds: () => apiFetch("/api/v1/admin/odds/refresh", { method: "POST" }),
@@ -308,10 +321,66 @@ export interface SystemStatus {
   odds_snapshots: number;
   competitions_active: number;
   odds_api_quota: { remaining?: string; used?: string };
+  history?: HistoryStatus;
 }
 
 export interface Competition {
   code: string;
   name: string;
   country: string;
+}
+
+export interface RefreshRun {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  events_seen: number;
+  predictions_saved: number;
+  odds_saved: number;
+  value_bets_saved: number;
+  message: string | null;
+}
+
+export interface HistoryStatus {
+  enabled: boolean;
+  message?: string;
+  events_total?: number;
+  prediction_snapshots?: number;
+  odds_price_snapshots?: number;
+  value_bet_snapshots?: number;
+  refresh_runs?: number;
+  latest_refresh?: RefreshRun | null;
+}
+
+export interface HistorySnapshotResponse extends HistoryStatus {
+  saved?: boolean;
+  run_id?: number;
+  events_seen?: number;
+  upcoming_seen?: number;
+  predictions_saved?: number;
+  odds_saved?: number;
+  value_bets_saved?: number;
+}
+
+export interface EventHistoryResponse {
+  enabled: boolean;
+  message?: string;
+  event?: Record<string, any> | null;
+  predictions?: Record<string, any>[];
+  odds?: Record<string, any>[];
+  value_bets?: Record<string, any>[];
+}
+
+export interface PerformanceSummary {
+  enabled: boolean;
+  message?: string;
+  evaluated_predictions?: number;
+  hit_rate?: number | null;
+  brier_score?: number | null;
+  log_loss?: number | null;
+  settled_value_bets?: number;
+  flat_stake_profit?: number;
+  flat_stake_yield?: number | null;
+  note?: string;
 }

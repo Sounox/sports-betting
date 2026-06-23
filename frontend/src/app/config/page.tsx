@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
-import { api, type SystemStatus } from "@/lib/api";
+import { api, type HistoryStatus, type SystemStatus } from "@/lib/api";
 import { RefreshCw, Download, Loader2, CheckCircle, Clock, Database, Zap, Play } from "lucide-react";
 
 const AVAILABLE_COMPS = [
@@ -19,9 +19,11 @@ function clsx(...args: (string | boolean | undefined)[]) {
 
 export default function ConfigPage() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [historyStatus, setHistoryStatus] = useState<HistoryStatus | null>(null);
   const [importing, setImporting] = useState<string | null>(null);
   const [refreshingOdds, setRefreshingOdds] = useState(false);
   const [runningPreds, setRunningPreds] = useState(false);
+  const [snapshotting, setSnapshotting] = useState(false);
   const [messages, setMessages] = useState<{ text: string; type: "ok" | "err" | "info" }[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [autoInterval, setAutoInterval] = useState(60);
@@ -32,7 +34,13 @@ export default function ConfigPage() {
     setMessages(m => [{ text, type }, ...m].slice(0, 20));
 
   const loadStatus = async () => {
-    try { setStatus(await api.getStatus()); } catch {}
+    try {
+      const nextStatus = await api.getStatus();
+      setStatus(nextStatus);
+      setHistoryStatus(nextStatus.history ?? null);
+    } catch {
+      try { setHistoryStatus(await api.getHistoryStatus()); } catch {}
+    }
   };
 
   useEffect(() => { loadStatus(); }, []);
@@ -56,6 +64,7 @@ export default function ConfigPage() {
     try {
       await api.refreshOdds();
       await api.runPredictions();
+      await api.createHistorySnapshot(168);
       await loadStatus();
       log("✓ Mise à jour auto terminée", "ok");
     } catch (e: any) { log("✗ Erreur: " + e.message, "err"); }
@@ -94,6 +103,24 @@ export default function ConfigPage() {
       log("✓ Prédictions calculées", "ok");
     } catch (e: any) { log("✗ " + e.message, "err"); }
     finally { setRunningPreds(false); }
+  };
+
+  const doCreateSnapshot = async () => {
+    setSnapshotting(true);
+    log("Snapshot historique...", "info");
+    try {
+      const result = await api.createHistorySnapshot(168);
+      await loadStatus();
+      if (result.saved) {
+        log(`Snapshot OK: ${result.predictions_saved || 0} predictions, ${result.odds_saved || 0} lignes de cotes`, "ok");
+      } else {
+        log(result.message || "Stockage historique non configure", "info");
+      }
+    } catch (e: any) {
+      log("Erreur snapshot: " + e.message, "err");
+    } finally {
+      setSnapshotting(false);
+    }
   };
 
   const fmtCountdown = (s: number) => `${Math.floor(s / 60)}m${(s % 60).toString().padStart(2, "0")}s`;
@@ -138,6 +165,56 @@ export default function ConfigPage() {
             Calculer toutes les prédictions
           </button>
         </div>
+      </div>
+
+      <div className="card">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div>
+            <h2 className="font-semibold text-white mb-1 flex items-center gap-2">
+              <Database size={16} className="text-blue-400" />
+              Historique durable / backtesting
+            </h2>
+            <p className="text-gray-500 text-xs">
+              Stocke les snapshots de predictions, cotes et value bets pour mesurer ROI, yield, Brier Score et CLV.
+            </p>
+          </div>
+          <span className={clsx(
+            "text-xs px-3 py-1 rounded-full border self-start",
+            historyStatus?.enabled
+              ? "border-green-800 bg-green-900/30 text-green-400"
+              : "border-yellow-800 bg-yellow-900/30 text-yellow-400"
+          )}>
+            {historyStatus?.enabled ? "D1 actif" : "D1 non configure"}
+          </span>
+        </div>
+
+        {historyStatus?.enabled ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+            <MiniStat label="Matchs stockes" value={historyStatus.events_total || 0} />
+            <MiniStat label="Predictions" value={historyStatus.prediction_snapshots || 0} />
+            <MiniStat label="Lignes cotes" value={historyStatus.odds_price_snapshots || 0} />
+            <MiniStat label="Value bets" value={historyStatus.value_bet_snapshots || 0} />
+          </div>
+        ) : (
+          <div className="mt-4 rounded-xl border border-yellow-900/50 bg-yellow-950/20 p-3 text-sm text-yellow-300">
+            {historyStatus?.message || "Le code est pret. Il manque seulement le binding Cloudflare D1 SPORTSBET_DB."}
+          </div>
+        )}
+
+        {historyStatus?.latest_refresh && (
+          <p className="text-xs text-gray-500 mt-3">
+            Dernier snapshot: {historyStatus.latest_refresh.status} - {new Date(historyStatus.latest_refresh.started_at).toLocaleString("fr-FR")}
+          </p>
+        )}
+
+        <button
+          onClick={doCreateSnapshot}
+          disabled={snapshotting}
+          className="btn-secondary flex items-center justify-center gap-2 py-3 mt-4 w-full md:w-auto"
+        >
+          {snapshotting ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />}
+          Creer un snapshot historique
+        </button>
       </div>
 
       {/* Import compétitions */}
@@ -236,6 +313,15 @@ export default function ConfigPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="bg-gray-800/70 rounded-xl p-3 border border-gray-700">
+      <div className="text-lg font-bold text-white">{value}</div>
+      <div className="text-xs text-gray-500">{label}</div>
     </div>
   );
 }
