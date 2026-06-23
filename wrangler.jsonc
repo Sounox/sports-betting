@@ -1,6 +1,6 @@
 {
   "$schema": "./frontend/node_modules/wrangler/config-schema.json",
-  "name": "sportsbet-analyzer",
+  "name": "sports-betting",
   "main": "cloudflare-worker.ts",
   "compatibility_date": "2026-06-23",
   "compatibility_flags": ["nodejs_compat"],
