@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     odds_api_key: str = "baa56883db051af74cc48c5512bfc426"
     football_data_api_key: str = "23589c0d13d34aa1bc32e5f2017b7e34"
+    gemini_api_key: str = ""
+    groq_api_key: str = "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"
     secret_key: str = "dev-secret-change-in-prod"
     debug: bool = True
 

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.database import engine, Base
-from app.api.routes import events, parlays, bankroll, admin
+from app.api.routes import events, parlays, bankroll, admin, ai
 
 # Celery/Redis optionnel — ne bloque pas le démarrage
 try:
@@ -46,6 +46,7 @@ app.include_router(events.router, prefix="/api/v1")
 app.include_router(parlays.router, prefix="/api/v1")
 app.include_router(bankroll.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(ai.router, prefix="/api/v1")
 
 
 @app.get("/")
