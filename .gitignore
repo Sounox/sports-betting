@@ -17,6 +17,7 @@ frontend/.next/
 frontend/node_modules/
 frontend/.open-next/
 frontend/.wrangler/
+.wrangler/
 
 # Docker volumes
 postgres_data/

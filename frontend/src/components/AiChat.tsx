@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { Bot, Send, Loader2, X, MessageSquare } from "lucide-react";
 import { clsx } from "clsx";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 interface Message {
   role: "user" | "assistant";
