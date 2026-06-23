@@ -29,42 +29,51 @@ function extractTag(xml: string, tag: string) {
 }
 
 async function fetchNews(event: Event): Promise<NewsSource[]> {
-  const query = [
-    `"${event.home_team}"`,
-    `"${event.away_team}"`,
-    "football",
-    "World Cup",
-    "injury OR lineup OR suspension OR form",
-  ].join(" ");
-  const url = new URL("https://news.google.com/rss/search");
-  url.searchParams.set("q", query);
-  url.searchParams.set("hl", "en-US");
-  url.searchParams.set("gl", "US");
-  url.searchParams.set("ceid", "US:en");
+  const queries = [
+    `"${event.home_team}" "${event.away_team}" football World Cup`,
+    `"${event.home_team}" football injury lineup suspension form`,
+    `"${event.away_team}" football injury lineup suspension form`,
+  ];
+  const seen = new Set<string>();
+  const sources: NewsSource[] = [];
 
-  const response = await fetch(url, {
-    next: { revalidate: 10800 },
-    ...({
-      cf: {
-        cacheEverything: true,
-        cacheTtl: 10800,
-        cacheKey: `https://news-cache.sportsbet/${event.id}`,
-      },
-    } as Record<string, unknown>),
-  });
-  if (!response.ok) return [];
+  for (const query of queries) {
+    const url = new URL("https://news.google.com/rss/search");
+    url.searchParams.set("q", query);
+    url.searchParams.set("hl", "en-US");
+    url.searchParams.set("gl", "US");
+    url.searchParams.set("ceid", "US:en");
 
-  const xml = await response.text();
-  const items = xml.match(/<item>[\s\S]*?<\/item>/gi) || [];
-  return items.slice(0, 12).map((item) => {
-    const sourceMatch = item.match(/<source[^>]*>([\s\S]*?)<\/source>/i);
-    return {
-      title: extractTag(item, "title"),
-      url: extractTag(item, "link"),
-      published_at: extractTag(item, "pubDate") || undefined,
-      source: sourceMatch ? decodeXml(sourceMatch[1]) : undefined,
-    };
-  });
+    const response = await fetch(url, {
+      next: { revalidate: 10800 },
+      ...({
+        cf: {
+          cacheEverything: true,
+          cacheTtl: 10800,
+          cacheKey: `https://news-cache.sportsbet/${event.id}/${query}`,
+        },
+      } as Record<string, unknown>),
+    });
+    if (!response.ok) continue;
+
+    const xml = await response.text();
+    const items = xml.match(/<item>[\s\S]*?<\/item>/gi) || [];
+    for (const item of items.slice(0, 8)) {
+      const sourceMatch = item.match(/<source[^>]*>([\s\S]*?)<\/source>/i);
+      const source = {
+        title: extractTag(item, "title"),
+        url: extractTag(item, "link"),
+        published_at: extractTag(item, "pubDate") || undefined,
+        source: sourceMatch ? decodeXml(sourceMatch[1]) : undefined,
+      };
+      const key = source.url || source.title;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      sources.push(source);
+    }
+  }
+
+  return sources.slice(0, 12);
 }
 
 async function runAi(prompt: string) {
@@ -84,6 +93,152 @@ function parseJson<T>(raw: string): T {
   const end = raw.lastIndexOf("}") + 1;
   if (start < 0 || end <= start) throw new Error("AI response is not JSON");
   return JSON.parse(raw.slice(start, end)) as T;
+}
+
+function pct(value?: number) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "n/a";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function predictionConfidence(event: Event) {
+  return event.prediction?.confidence || "medium";
+}
+
+function internalFactors(
+  event: Event,
+  playerInsights: PlayerInsights | null,
+): MatchContext["factors"] {
+  const prediction = event.prediction;
+  const lambda = prediction?.markets?.lambda || {};
+  const overUnder = prediction?.markets?.over_under || {};
+  const btts = prediction?.markets?.btts || {};
+  const topScores = prediction?.markets?.top_scores || [];
+  const bestPlayers = (playerInsights?.players || []).slice(0, 3);
+  const valueBets = (prediction?.value_bets || []).slice(0, 3);
+  const favorite =
+    (prediction?.prob_home || 0) >= (prediction?.prob_away || 0)
+      ? {
+          team: event.home_team,
+          prob: prediction?.prob_home,
+          impact: "positive_home" as const,
+        }
+      : {
+          team: event.away_team,
+          prob: prediction?.prob_away,
+          impact: "positive_away" as const,
+        };
+  const factors: MatchContext["factors"] = [];
+
+  if (prediction) {
+    factors.push({
+      text: `Selon le modele interne, ${favorite.team} est favori avec ${pct(favorite.prob)}, contre ${pct(prediction.prob_draw)} pour le nul.`,
+      impact: favorite.impact,
+      confidence: predictionConfidence(event),
+      source_indices: [],
+    });
+  }
+
+  if (typeof lambda.home === "number" && typeof lambda.away === "number") {
+    factors.push({
+      text: `Projection buts attendus: ${event.home_team} ${lambda.home.toFixed(2)} - ${event.away_team} ${lambda.away.toFixed(2)}, soit ${(lambda.home + lambda.away).toFixed(2)} buts au total.`,
+      impact: "neutral",
+      confidence: "medium",
+      source_indices: [],
+    });
+  }
+
+  if (typeof overUnder.over_2_5 === "number" && typeof btts.yes === "number") {
+    factors.push({
+      text: `Lecture buts: Over 2.5 a ${pct(overUnder.over_2_5)}, Under 2.5 a ${pct(overUnder.under_2_5)}, BTTS Oui a ${pct(btts.yes)}.`,
+      impact: "neutral",
+      confidence: "medium",
+      source_indices: [],
+    });
+  }
+
+  if (Array.isArray(topScores) && topScores.length) {
+    const scores = topScores
+      .slice(0, 3)
+      .map((score: { score: string; probability?: number; prob?: number }) =>
+        `${score.score} (${pct(score.probability ?? score.prob)})`,
+      )
+      .join(", ");
+    factors.push({
+      text: `Scores les plus probables du simulateur: ${scores}.`,
+      impact: "neutral",
+      confidence: "medium",
+      source_indices: [],
+    });
+  }
+
+  if (bestPlayers.length) {
+    factors.push({
+      text: `Joueurs les plus exposes au but: ${bestPlayers
+        .map((player) => `${player.player} ${pct(player.anytime_scorer_probability)}`)
+        .join(", ")}.`,
+      impact: "neutral",
+      confidence: bestPlayers.some((player) => player.reliability === "medium")
+        ? "medium"
+        : "low",
+      source_indices: [],
+    });
+  }
+
+  if (valueBets.length) {
+    factors.push({
+      text: `Value bets detectes: ${valueBets
+        .map((bet) => `${bet.label} @ ${bet.odds} (${bet.bookmaker}, edge ${pct(bet.edge)})`)
+        .join("; ")}.`,
+      impact: "neutral",
+      confidence: predictionConfidence(event),
+      source_indices: [],
+    });
+  }
+
+  factors.push({
+    text: "Risque principal: compositions officielles, blessures recentes et rotations ne sont pas encore confirmees.",
+    impact: "risk",
+    confidence: "high",
+    source_indices: [],
+  });
+
+  return factors.slice(0, 8);
+}
+
+function internalDataGaps(sources: NewsSource[]) {
+  const gaps = [
+    "Compositions officielles et minutes probables non confirmees.",
+    "Blessures, suspensions et rotation non appliquees sans source fiable.",
+    "Les projections joueurs sont derivees du modele et de la forme tournoi, pas encore de donnees xG joueur completes.",
+  ];
+
+  if (sources.length < 0) {
+    gaps.unshift(
+      "Aucune source externe recente exploitable: le brief est une analyse interne, pas une verification d'actualite.",
+    );
+  }
+
+  return gaps;
+}
+
+function fallbackContext(
+  event: Event,
+  playerInsights: PlayerInsights | null,
+  sources: NewsSource[] = [],
+): MatchContext {
+  const prediction = event.prediction;
+  const favorite =
+    (prediction?.prob_home || 0) >= (prediction?.prob_away || 0)
+      ? `${event.home_team} (${pct(prediction?.prob_home)})`
+      : `${event.away_team} (${pct(prediction?.prob_away)})`;
+
+  return {
+    generated_at: new Date().toISOString(),
+    summary: `Brief interne: le modele place ${favorite} comme option la plus probable, avec un nul a ${pct(prediction?.prob_draw)}. L'analyse combine probabilites, buts attendus, cotes disponibles et projections joueurs. Les actualites ne modifient pas encore la prediction tant qu'elles ne sont pas confirmees par une source fiable.`,
+    factors: internalFactors(event, playerInsights),
+    data_gaps: internalDataGaps(sources),
+    sources,
+  };
 }
 
 export async function buildMatchContext(
@@ -123,7 +278,8 @@ export async function buildMatchContext(
   const prompt = `You are a sports data extraction engine, not a tipster.
 Analyze ONLY the evidence below for ${event.home_team} vs ${event.away_team}.
 Do not use unstated knowledge. Do not invent injuries, lineups, motivation or player status.
-Every factual factor must cite one or more valid source indices.
+For model-derived factors, use source_indices: [] and clearly say "Selon le modele".
+For news-derived factual factors, cite one or more valid source indices.
 If evidence is weak, say so in data_gaps.
 
 MODEL:
@@ -131,6 +287,8 @@ home=${event.prediction?.prob_home}
 draw=${event.prediction?.prob_draw}
 away=${event.prediction?.prob_away}
 expected_goals=${JSON.stringify(event.prediction?.markets?.lambda || {})}
+markets=${JSON.stringify(event.prediction?.markets || {})}
+value_bets=${JSON.stringify((event.prediction?.value_bets || []).slice(0, 5))}
 
 PLAYER MODEL:
 ${topPlayers || "No player model available"}
@@ -152,11 +310,18 @@ Return strict JSON:
   "data_gaps": ["French missing-data statement"]
 }`;
 
-  const parsed = parseJson<{
+  let parsed: {
     summary?: string;
     factors?: MatchContext["factors"];
     data_gaps?: string[];
-  }>(await runAi(prompt));
+  };
+
+  try {
+    parsed = parseJson(await runAi(prompt));
+  } catch (error) {
+    console.error("AI context generation failed, using fallback", error);
+    return fallbackContext(event, playerInsights, sources);
+  }
 
   const factors = (parsed.factors || [])
     .filter(
@@ -175,8 +340,11 @@ Return strict JSON:
     summary:
       parsed.summary ||
       "Les sources récentes ne permettent pas de dégager un facteur contextuel robuste.",
-    factors,
-    data_gaps: (parsed.data_gaps || []).slice(0, 8),
+    factors: factors.length ? factors : internalFactors(event, playerInsights),
+    data_gaps: [
+      ...(parsed.data_gaps || []),
+      ...internalDataGaps(sources),
+    ].slice(0, 8),
     sources,
   };
 }

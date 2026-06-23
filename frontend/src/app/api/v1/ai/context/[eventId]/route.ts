@@ -14,7 +14,7 @@ export async function GET(
     globalThis as unknown as { caches?: { default?: Cache } }
   ).caches?.default;
   const cacheKey = new Request(
-    `${request.nextUrl.origin}/__cache/ai-context/${eventId}`,
+    `${request.nextUrl.origin}/__cache/ai-context-v2/${eventId}`,
   );
 
   try {

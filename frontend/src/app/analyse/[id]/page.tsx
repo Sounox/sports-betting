@@ -392,13 +392,15 @@ function Stat({ label, value, highlight }: { label: string; value: string; highl
 }
 
 function ContextPanel({ context }: { context: MatchContext }) {
+  const hasExternalSources = context.sources.length > 0;
+
   return (
     <div className="card space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="font-semibold text-white flex items-center gap-2">
             <Sparkles size={16} className="text-cyan-400" />
-            Contexte vérifié par IA
+            {hasExternalSources ? "Contexte IA avec sources" : "Contexte IA - donnees internes"}
           </h3>
           <p className="text-sm text-gray-300 mt-2">{context.summary}</p>
         </div>
@@ -413,8 +415,10 @@ function ContextPanel({ context }: { context: MatchContext }) {
             <div key={index} className="rounded-xl bg-gray-800/70 p-3">
               <div className="text-sm text-gray-200">{factor.text}</div>
               <div className="text-xs text-gray-500 mt-1">
-                Fiabilité {factor.confidence} · sources{" "}
-                {factor.source_indices.map((source) => source + 1).join(", ")}
+                Fiabilite {factor.confidence} ·{" "}
+                {factor.source_indices.length
+                  ? `sources ${factor.source_indices.map((source) => source + 1).join(", ")}`
+                  : "analyse interne"}
               </div>
             </div>
           ))}
