@@ -1,0 +1,11 @@
+{
+  "name": "sportsbet-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "install:frontend": "npm --prefix frontend ci",
+    "build": "npm --prefix frontend run build",
+    "preview": "npm --prefix frontend run preview",
+    "deploy": "npx wrangler deploy"
+  }
+}

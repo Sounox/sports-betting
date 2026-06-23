@@ -124,6 +124,7 @@ export interface ParlayRequest {
 export interface ParlayResponse {
   success: boolean;
   error?: string;
+  message?: string;
   parlay?: {
     legs: ParlayLeg[];
     total_odds: number;
@@ -158,6 +159,8 @@ export interface BankrollData {
   win_rate: number;
   max_stake_pct: number;
   max_stake_amount: number;
+  kelly_fraction: number;
+  stop_loss_pct: number;
   drawdown: number;
   alerts: string[];
 }
