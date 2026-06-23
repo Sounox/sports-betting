@@ -28,6 +28,12 @@ npx wrangler d1 create sportsbet-history
 npx wrangler d1 execute sportsbet-history --file=./migrations/0001_history.sql
 ```
 
+For an existing database, also apply later migrations in order:
+
+```bash
+npx wrangler d1 execute sportsbet-history --remote --file=./migrations/0002_backtesting.sql
+```
+
 4. Deploy:
 
 ```bash

@@ -17,6 +17,7 @@ function num(value?: number | null, digits = 3) {
 export default function PerformancePage() {
   const [summary, setSummary] = useState<PerformanceSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [settling, setSettling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -35,6 +36,19 @@ export default function PerformancePage() {
     load();
   }, []);
 
+  const settle = async () => {
+    setSettling(true);
+    setError(null);
+    try {
+      await api.settlePerformance();
+      await load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setSettling(false);
+    }
+  };
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-center justify-between">
@@ -47,10 +61,16 @@ export default function PerformancePage() {
             Mesure la fiabilite reelle: hit rate, Brier Score, log loss, yield et profit flat stake.
           </p>
         </div>
-        <button onClick={load} className="btn-secondary flex items-center gap-2 text-sm">
-          <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
-          Actualiser
-        </button>
+        <div className="flex gap-2">
+          <button onClick={settle} disabled={settling} className="btn-primary flex items-center gap-2 text-sm">
+            <RefreshCw size={14} className={settling ? "animate-spin" : ""} />
+            Mettre a jour
+          </button>
+          <button onClick={load} className="btn-secondary flex items-center gap-2 text-sm">
+            <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            Actualiser
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -89,8 +109,8 @@ export default function PerformancePage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Metric
               icon={<Target size={18} />}
-              label="Predictions evaluees"
-              value={String(summary.evaluated_predictions || 0)}
+              label="Matchs evalues"
+              value={String(summary.events_evaluated || summary.evaluated_predictions || 0)}
             />
             <Metric
               icon={<TrendingUp size={18} />}
@@ -111,6 +131,11 @@ export default function PerformancePage() {
             />
             <Metric
               icon={<TrendingUp size={18} />}
+              label="Marches modele regles"
+              value={String(summary.prediction_markets_settled || 0)}
+            />
+            <Metric
+              icon={<TrendingUp size={18} />}
               label="Value bets reglees"
               value={String(summary.settled_value_bets || 0)}
             />
@@ -127,14 +152,72 @@ export default function PerformancePage() {
             <p className="text-sm text-gray-400">
               {summary.note}
             </p>
+            {summary.latest_settlement && (
+              <p className="text-xs text-gray-500 mt-2">
+                Dernier settlement: {summary.latest_settlement.status} - {new Date(summary.latest_settlement.started_at).toLocaleString("fr-FR")}
+              </p>
+            )}
             <p className="text-xs text-gray-600 mt-3">
               Ces mesures ne garantissent rien. Elles servent a detecter si le modele bat vraiment le marche sur la duree.
             </p>
+          </div>
+
+          <div className="card overflow-x-auto">
+            <h2 className="font-semibold text-white mb-3">Performance par marche</h2>
+            {(summary.market_breakdown || []).length === 0 ? (
+              <p className="text-sm text-gray-500">
+                Aucun marche encore evalue. Lance une mise a jour apres des matchs termines avec snapshots pre-match.
+              </p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                    <th className="py-2 pr-3">Source</th>
+                    <th className="py-2 pr-3">Marche</th>
+                    <th className="py-2 pr-3 text-right">Regles</th>
+                    <th className="py-2 pr-3 text-right">Winrate</th>
+                    <th className="py-2 pr-3 text-right">Profit flat</th>
+                    <th className="py-2 pr-3 text-right">Yield</th>
+                    <th className="py-2 text-right">Prob. moy.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(summary.market_breakdown || []).map((row) => (
+                    <tr key={`${row.source}-${row.market}`} className="border-b border-gray-900 text-gray-300">
+                      <td className="py-2 pr-3">
+                        {row.source === "value_bet" ? "Value bet" : "Modele"}
+                      </td>
+                      <td className="py-2 pr-3">{labelMarket(row.market)}</td>
+                      <td className="py-2 pr-3 text-right">{row.settled}</td>
+                      <td className="py-2 pr-3 text-right">{pct(row.hit_rate)}</td>
+                      <td className={`py-2 pr-3 text-right ${row.flat_profit >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        {row.flat_profit >= 0 ? "+" : ""}{row.flat_profit.toFixed(2)}
+                      </td>
+                      <td className={`py-2 pr-3 text-right ${(row.flat_yield || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        {pct(row.flat_yield)}
+                      </td>
+                      <td className="py-2 text-right">{pct(row.avg_model_prob)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </>
       )}
     </div>
   );
+}
+
+function labelMarket(market: string) {
+  const labels: Record<string, string> = {
+    h2h: "1N2",
+    totals: "Over/Under",
+    btts: "BTTS",
+    spreads: "Handicap",
+    exact_score: "Score exact",
+  };
+  return labels[market] || market;
 }
 
 function Metric({

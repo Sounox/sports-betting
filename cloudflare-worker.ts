@@ -28,6 +28,9 @@ export default {
       await fetch(`${origin}/api/v1/admin/history/snapshot?hours=168`, {
         method: "POST",
       });
+      await fetch(`${origin}/api/v1/admin/performance/settle`, {
+        method: "POST",
+      });
       await fetch(`${origin}/api/v1/admin/performance/summary`);
 
       if (controller.cron === "15 */6 * * *") {

@@ -312,6 +312,7 @@ export function calculateValueBets(
       scheduled_at: event.scheduled_at,
       market: candidate.market,
       selection: candidate.selection,
+      point: candidate.point,
       model_prob: Number(probability.toFixed(4)),
       fair_prob: Number(candidate.fairProb.toFixed(4)),
       implied_prob: Number(candidate.impliedProb.toFixed(4)),

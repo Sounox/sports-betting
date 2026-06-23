@@ -71,6 +71,10 @@ export const api = {
     ),
   getPerformanceSummary: () =>
     apiFetch<PerformanceSummary>("/api/v1/admin/performance/summary"),
+  settlePerformance: () =>
+    apiFetch<SettlementResponse>("/api/v1/admin/performance/settle", {
+      method: "POST",
+    }),
   importCompetition: (code: string, season?: number) =>
     apiFetch(`/api/v1/admin/import/${code}${season ? `?season=${season}` : ""}`, { method: "POST" }),
   refreshOdds: () => apiFetch("/api/v1/admin/odds/refresh", { method: "POST" }),
@@ -116,6 +120,7 @@ export interface ValueBet {
   scheduled_at?: string;
   market: string;
   selection: string;
+  point?: number;
   model_prob: number;
   fair_prob: number;
   implied_prob: number;
@@ -349,8 +354,11 @@ export interface HistoryStatus {
   prediction_snapshots?: number;
   odds_price_snapshots?: number;
   value_bet_snapshots?: number;
+  backtest_results?: number;
+  settlement_runs?: number;
   refresh_runs?: number;
   latest_refresh?: RefreshRun | null;
+  latest_settlement?: SettlementRun | null;
 }
 
 export interface HistorySnapshotResponse extends HistoryStatus {
@@ -382,5 +390,45 @@ export interface PerformanceSummary {
   settled_value_bets?: number;
   flat_stake_profit?: number;
   flat_stake_yield?: number | null;
+  events_evaluated?: number;
+  prediction_markets_settled?: number;
+  latest_settlement?: SettlementRun | null;
+  market_breakdown?: MarketPerformance[];
   note?: string;
+}
+
+export interface SettlementResponse {
+  enabled: boolean;
+  message?: string;
+  settled?: boolean;
+  run_id?: number;
+  events_checked?: number;
+  events_settled?: number;
+  prediction_markets_settled?: number;
+  value_bets_settled?: number;
+}
+
+export interface SettlementRun {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  events_checked: number;
+  events_settled: number;
+  prediction_markets_settled: number;
+  value_bets_settled: number;
+  message: string | null;
+}
+
+export interface MarketPerformance {
+  source: "prediction" | "value_bet";
+  market: string;
+  settled: number;
+  won: number;
+  lost: number;
+  push: number;
+  hit_rate: number | null;
+  flat_profit: number;
+  flat_yield: number | null;
+  avg_model_prob: number | null;
 }
