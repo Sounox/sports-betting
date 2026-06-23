@@ -22,6 +22,10 @@ export const api = {
   },
   getEvent: (id: number) => apiFetch<Event>(`/api/v1/events/${id}`),
   getEventOdds: (id: number) => apiFetch<OddsSnapshot[]>(`/api/v1/events/${id}/odds`),
+  getPlayerInsights: (id: number) =>
+    apiFetch<PlayerInsights>(`/api/v1/events/${id}/players`),
+  getMatchContext: (id: number) =>
+    apiFetch<MatchContext>(`/api/v1/ai/context/${id}`),
   predictEvent: (id: number) =>
     apiFetch<Prediction>(`/api/v1/events/${id}/predict`, { method: "POST" }),
 
@@ -65,6 +69,8 @@ export interface Event {
   status: string;
   matchday?: number;
   stage?: string;
+  home_team_id?: number;
+  away_team_id?: number;
   result?: { home_score: number; away_score: number; winner: string };
   prediction?: Prediction;
 }
@@ -108,9 +114,53 @@ export interface ValueBet {
 export interface OddsSnapshot {
   bookmaker: string;
   market: string;
-  selections: { key: string; name: string; price: number; fair_prob: number }[];
+  selections: { key: string; name: string; price: number; fair_prob: number; point?: number }[];
   overround: number;
   captured_at: string;
+}
+
+export interface PlayerProjection {
+  player_id: number;
+  player: string;
+  team: string;
+  position: string;
+  tournament_matches: number;
+  tournament_goals: number;
+  tournament_assists: number;
+  expected_goals: number;
+  anytime_scorer_probability: number;
+  brace_probability: number;
+  assist_probability: number;
+  outside_box_goal_probability: number;
+  reliability: "low" | "medium" | "high";
+  evidence: string[];
+}
+
+export interface PlayerInsights {
+  event_id: number;
+  generated_at: string;
+  methodology: string;
+  data_freshness: Record<string, string | undefined>;
+  players: PlayerProjection[];
+  warnings: string[];
+}
+
+export interface MatchContext {
+  generated_at: string;
+  summary: string;
+  factors: Array<{
+    text: string;
+    impact: "positive_home" | "positive_away" | "neutral" | "risk";
+    confidence: "low" | "medium" | "high";
+    source_indices: number[];
+  }>;
+  data_gaps: string[];
+  sources: Array<{
+    title: string;
+    url: string;
+    published_at?: string;
+    source?: string;
+  }>;
 }
 
 export interface ParlayRequest {

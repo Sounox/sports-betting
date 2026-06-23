@@ -1,4 +1,9 @@
 import type { Event, Prediction } from "@/lib/api";
+import {
+  calculateValueBets,
+  getWorldCupOdds,
+  matchOddsEvent,
+} from "@/lib/server/odds-cloud";
 
 const FOOTBALL_DATA_BASE = "https://api.football-data.org/v4";
 const FOOTBALL_DATA_KEY =
@@ -90,8 +95,8 @@ interface FootballDataMatch {
   matchday?: number;
   stage?: string;
   competition: { code: string; name: string };
-  homeTeam: { name?: string | null };
-  awayTeam: { name?: string | null };
+  homeTeam: { id?: number | null; name?: string | null };
+  awayTeam: { id?: number | null; name?: string | null };
   score?: {
     winner?: string | null;
     fullTime?: { home?: number | null; away?: number | null };
@@ -210,6 +215,8 @@ function createPrediction(
         over_1_5: Number(matrix.over(1.5).toFixed(4)),
         over_2_5: Number(matrix.over(2.5).toFixed(4)),
         over_3_5: Number(matrix.over(3.5).toFixed(4)),
+        under_2_5: Number((1 - matrix.over(2.5)).toFixed(4)),
+        under_3_5: Number((1 - matrix.over(3.5)).toFixed(4)),
       },
       btts: {
         yes: Number(matrix.bttsYes.toFixed(4)),
@@ -236,6 +243,8 @@ function serializeMatch(match: FootballDataMatch): Event | null {
     status: match.status,
     matchday: match.matchday,
     stage: match.stage,
+    home_team_id: match.homeTeam.id || undefined,
+    away_team_id: match.awayTeam.id || undefined,
     prediction: createPrediction(match.id, homeTeam, awayTeam),
   };
 
@@ -277,7 +286,7 @@ export async function getWorldCupMatches(): Promise<Event[]> {
 export async function getUpcomingMatches(hours = 48): Promise<Event[]> {
   const now = Date.now();
   const end = now + clamp(hours, 1, 24 * 30) * 60 * 60 * 1000;
-  return (await getWorldCupMatches())
+  const events = (await getWorldCupMatches())
     .filter(
       (event) =>
         UPCOMING_STATUSES.has(event.status) &&
@@ -289,6 +298,7 @@ export async function getUpcomingMatches(hours = 48): Promise<Event[]> {
         new Date(a.scheduled_at).getTime() -
         new Date(b.scheduled_at).getTime(),
     );
+  return attachOdds(events);
 }
 
 export async function getTodayMatches(): Promise<Event[]> {
@@ -299,15 +309,43 @@ export async function getTodayMatches(): Promise<Event[]> {
     now.getUTCDate(),
   );
   const end = start + 24 * 60 * 60 * 1000;
-  return (await getWorldCupMatches()).filter((event) => {
+  const events = (await getWorldCupMatches()).filter((event) => {
     const kickoff = new Date(event.scheduled_at).getTime();
     return kickoff >= start && kickoff < end;
   });
+  return attachOdds(events);
 }
 
 export async function getMatch(eventId: number): Promise<Event | null> {
   const payload = await footballDataFetch<FootballDataMatch>(
     `/matches/${eventId}`,
   );
-  return serializeMatch(payload);
+  const event = serializeMatch(payload);
+  if (!event) return null;
+  const [withOdds] = await attachOdds([event]);
+  return withOdds;
+}
+
+async function attachOdds(events: Event[]) {
+  if (!events.length) return events;
+  try {
+    const { events: oddsEvents } = await getWorldCupOdds();
+    return events.map((event) => {
+      const oddsEvent = matchOddsEvent(event, oddsEvents);
+      const valueBets = calculateValueBets(event, oddsEvent);
+      if (event.prediction) {
+        event.prediction.value_bets = valueBets;
+        event.prediction.markets.best_odds_updated_at =
+          oddsEvent?.bookmakers?.[0]?.last_update || null;
+      }
+      return event;
+    });
+  } catch (error) {
+    console.error("Odds enrichment unavailable", error);
+    return events;
+  }
+}
+
+export async function getRawMatch(eventId: number) {
+  return footballDataFetch<FootballDataMatch>(`/matches/${eventId}`);
 }

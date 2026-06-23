@@ -1,9 +1,18 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "sportsbet-analyzer",
-  "main": ".open-next/worker.js",
+  "main": "../cloudflare-worker.ts",
   "compatibility_date": "2026-06-23",
   "compatibility_flags": ["nodejs_compat"],
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "PUBLIC_APP_URL": "https://sports-betting.abl-slancry.workers.dev"
+  },
+  "triggers": {
+    "crons": ["0 */4 * * *", "15 */6 * * *"]
+  },
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"

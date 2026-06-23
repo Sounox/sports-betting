@@ -1,8 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { api, type Event } from "@/lib/api";
-import { AlertTriangle, Loader2, RefreshCw, TrendingUp, Calculator, Target, BarChart2, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  api,
+  type Event,
+  type MatchContext,
+  type PlayerInsights,
+} from "@/lib/api";
+import { AlertTriangle, Loader2, RefreshCw, TrendingUp, Calculator, Target, BarChart2, ChevronDown, ChevronUp, Users, Sparkles, ExternalLink } from "lucide-react";
 import { clsx } from "clsx";
 
 export default function AnalysePage() {
@@ -10,6 +15,9 @@ export default function AnalysePage() {
   const [event, setEvent] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
   const [predicting, setPredicting] = useState(false);
+  const [playerInsights, setPlayerInsights] = useState<PlayerInsights | null>(null);
+  const [matchContext, setMatchContext] = useState<MatchContext | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(true);
 
   const load = async () => {
     setLoading(true);
@@ -23,7 +31,22 @@ export default function AnalysePage() {
     finally { setPredicting(false); }
   };
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    load();
+    setInsightsLoading(true);
+    Promise.allSettled([
+      api.getPlayerInsights(Number(id)),
+      api.getMatchContext(Number(id)),
+    ]).then(([playersResult, contextResult]) => {
+      if (playersResult.status === "fulfilled") {
+        setPlayerInsights(playersResult.value);
+      }
+      if (contextResult.status === "fulfilled") {
+        setMatchContext(contextResult.value);
+      }
+      setInsightsLoading(false);
+    });
+  }, [id]);
 
   if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-gray-500" size={32} /></div>;
   if (!event) return <div className="card text-gray-500">Événement non trouvé</div>;
@@ -165,7 +188,7 @@ export default function AnalysePage() {
                 {markets.top_scores.slice(0, 8).map((s: any, i: number) => (
                   <div key={i} className={clsx("flex items-center justify-between rounded-lg px-3 py-1.5", i === 0 ? "bg-green-900/40 border border-green-800/50" : "bg-gray-800/60")}>
                     <span className={clsx("font-bold", i === 0 ? "text-green-400" : "text-white")}>{s.score}</span>
-                    <span className="text-xs text-gray-400">{(s.prob * 100).toFixed(1)}%</span>
+                    <span className="text-xs text-gray-400">{((s.probability ?? s.prob ?? 0) * 100).toFixed(1)}%</span>
                   </div>
                 ))}
               </div>
@@ -173,6 +196,17 @@ export default function AnalysePage() {
           )}
         </div>
       )}
+
+      {insightsLoading && (
+        <div className="card flex items-center gap-3 text-sm text-gray-400">
+          <Loader2 size={16} className="animate-spin text-blue-400" />
+          Mise à jour des données joueurs et du contexte sourcé...
+        </div>
+      )}
+
+      {matchContext && <ContextPanel context={matchContext} />}
+
+      {playerInsights && <PlayerInsightsPanel insights={playerInsights} />}
 
       {/* Calculateur de paris */}
       {pred && <BetCalculator event={event} pred={pred} />}
@@ -354,6 +388,163 @@ function Stat({ label, value, highlight }: { label: string; value: string; highl
         {value}
       </div>
     </div>
+  );
+}
+
+function ContextPanel({ context }: { context: MatchContext }) {
+  return (
+    <div className="card space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="font-semibold text-white flex items-center gap-2">
+            <Sparkles size={16} className="text-cyan-400" />
+            Contexte vérifié par IA
+          </h3>
+          <p className="text-sm text-gray-300 mt-2">{context.summary}</p>
+        </div>
+        <span className="text-xs text-gray-500 shrink-0">
+          {new Date(context.generated_at).toLocaleString("fr-FR")}
+        </span>
+      </div>
+
+      {context.factors.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {context.factors.map((factor, index) => (
+            <div key={index} className="rounded-xl bg-gray-800/70 p-3">
+              <div className="text-sm text-gray-200">{factor.text}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                Fiabilité {factor.confidence} · sources{" "}
+                {factor.source_indices.map((source) => source + 1).join(", ")}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {context.data_gaps.length > 0 && (
+        <div className="rounded-xl border border-yellow-900/70 bg-yellow-950/20 p-3">
+          <div className="text-xs font-semibold text-yellow-400 mb-1">
+            Données encore manquantes
+          </div>
+          {context.data_gaps.map((gap, index) => (
+            <div key={index} className="text-xs text-yellow-200/70">
+              · {gap}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {context.sources.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {context.sources.slice(0, 6).map((source, index) => (
+            <a
+              key={index}
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 rounded-full bg-gray-800 px-2.5 py-1 text-xs text-gray-400 hover:text-white"
+            >
+              [{index + 1}] {source.source || "Source"}
+              <ExternalLink size={10} />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlayerInsightsPanel({ insights }: { insights: PlayerInsights }) {
+  return (
+    <div className="card space-y-4">
+      <div>
+        <h3 className="font-semibold text-white flex items-center gap-2">
+          <Users size={16} className="text-emerald-400" />
+          Projections joueurs
+        </h3>
+        <p className="text-xs text-gray-500 mt-1">{insights.methodology}</p>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[760px] text-sm">
+          <thead>
+            <tr className="border-b border-gray-800 text-left text-xs text-gray-500">
+              <th className="pb-2 pr-3">Joueur</th>
+              <th className="pb-2 px-2 text-center">Forme tournoi</th>
+              <th className="pb-2 px-2 text-center">Buteur</th>
+              <th className="pb-2 px-2 text-center">Doublé</th>
+              <th className="pb-2 px-2 text-center">Passe déc.</th>
+              <th className="pb-2 px-2 text-center">Hors surface</th>
+              <th className="pb-2 pl-2 text-right">Fiabilité</th>
+            </tr>
+          </thead>
+          <tbody>
+            {insights.players.slice(0, 12).map((player) => (
+              <tr key={player.player_id} className="border-b border-gray-900">
+                <td className="py-3 pr-3">
+                  <div className="font-semibold text-white">{player.player}</div>
+                  <div className="text-xs text-gray-500">
+                    {player.team} · {player.position}
+                  </div>
+                </td>
+                <td className="px-2 text-center text-xs text-gray-300">
+                  {player.tournament_goals} B · {player.tournament_assists} PD
+                  <div className="text-gray-600">
+                    {player.tournament_matches} match(s)
+                  </div>
+                </td>
+                <ProbabilityCell value={player.anytime_scorer_probability} strong />
+                <ProbabilityCell value={player.brace_probability} />
+                <ProbabilityCell value={player.assist_probability} />
+                <ProbabilityCell value={player.outside_box_goal_probability} experimental />
+                <td className="pl-2 text-right">
+                  <span className={clsx(
+                    "rounded-full px-2 py-1 text-xs",
+                    player.reliability === "high"
+                      ? "bg-green-900/40 text-green-400"
+                      : player.reliability === "medium"
+                        ? "bg-yellow-900/40 text-yellow-400"
+                        : "bg-gray-800 text-gray-500",
+                  )}>
+                    {player.reliability}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="space-y-1 border-t border-gray-800 pt-3">
+        {insights.warnings.map((warning, index) => (
+          <div key={index} className="text-xs text-yellow-500/80">
+            · {warning}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProbabilityCell({
+  value,
+  strong = false,
+  experimental = false,
+}: {
+  value: number;
+  strong?: boolean;
+  experimental?: boolean;
+}) {
+  return (
+    <td className="px-2 text-center">
+      <span className={clsx(
+        "font-bold",
+        strong && value >= 0.25 ? "text-green-400" : "text-gray-200",
+      )}>
+        {(value * 100).toFixed(1)}%
+      </span>
+      {experimental && <div className="text-[10px] text-gray-600">exp.</div>}
+    </td>
   );
 }
 
