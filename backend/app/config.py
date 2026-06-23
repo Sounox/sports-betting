@@ -3,10 +3,10 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql://sportsbet:sportsbet123@localhost:5432/sportsbet"
+    database_url: str = "sqlite:///./sportsbet.db"
     redis_url: str = "redis://localhost:6379/0"
-    odds_api_key: str = ""
-    football_data_api_key: str = ""
+    odds_api_key: str = "baa56883db051af74cc48c5512bfc426"
+    football_data_api_key: str = "23589c0d13d34aa1bc32e5f2017b7e34"
     secret_key: str = "dev-secret-change-in-prod"
     debug: bool = True
 
