@@ -25,7 +25,7 @@ export const api = {
   getPlayerInsights: (id: number) =>
     apiFetch<PlayerInsights>(`/api/v1/events/${id}/players`),
   getMatchContext: (id: number) =>
-    apiFetch<MatchContext>(`/api/v1/ai/context/${id}`),
+    apiFetch<MatchContext>(`/api/v1/ai/context/${id}?v=3`),
   predictEvent: (id: number) =>
     apiFetch<Prediction>(`/api/v1/events/${id}/predict`, { method: "POST" }),
 
