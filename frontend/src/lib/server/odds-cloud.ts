@@ -24,7 +24,7 @@ interface OddsBookmaker {
   markets: OddsMarket[];
 }
 
-interface OddsEvent {
+export interface OddsEvent {
   id: string;
   home_team: string;
   away_team: string;
@@ -79,15 +79,66 @@ function modelProbability(event: Event, candidate: CandidateOdd) {
   }
 
   if (candidate.market === "totals" && candidate.point != null) {
-    const key = `over_${String(candidate.point).replace(".", "_")}`;
-    const overProbability = prediction.markets?.over_under?.[key];
-    if (overProbability == null) return null;
+    const overProbability =
+      prediction.markets?.over_under?.[
+        `over_${String(candidate.point).replace(".", "_")}`
+      ] ?? totalGoalsProbability(prediction.markets?.lambda, candidate.point);
     return candidate.selection === "Over"
       ? overProbability
       : 1 - overProbability;
   }
 
+  if (candidate.market === "spreads" && candidate.point != null) {
+    return handicapProbability(
+      prediction.markets?.lambda,
+      normalize(candidate.selection) === normalize(event.home_team)
+        ? "home"
+        : "away",
+      candidate.point,
+    );
+  }
+
   return null;
+}
+
+function poissonProbability(goals: number, lambda: number) {
+  let factorial = 1;
+  for (let i = 2; i <= goals; i += 1) factorial *= i;
+  return (Math.exp(-lambda) * lambda ** goals) / factorial;
+}
+
+function totalGoalsProbability(
+  lambda: { home?: number; away?: number } | undefined,
+  line: number,
+) {
+  const total = (lambda?.home ?? 1.25) + (lambda?.away ?? 1.25);
+  let probability = 0;
+  for (let goals = 0; goals <= 12; goals += 1) {
+    if (goals > line) probability += poissonProbability(goals, total);
+  }
+  return probability;
+}
+
+function handicapProbability(
+  lambda: { home?: number; away?: number } | undefined,
+  team: "home" | "away",
+  point: number,
+) {
+  const lambdaHome = lambda?.home ?? 1.25;
+  const lambdaAway = lambda?.away ?? 1.25;
+  let probability = 0;
+
+  for (let home = 0; home <= 10; home += 1) {
+    for (let away = 0; away <= 10; away += 1) {
+      const p =
+        poissonProbability(home, lambdaHome) *
+        poissonProbability(away, lambdaAway);
+      if (team === "home" && home + point > away) probability += p;
+      if (team === "away" && away + point > home) probability += p;
+    }
+  }
+
+  return probability;
 }
 
 function recommendationScore(
@@ -117,7 +168,7 @@ function buildCandidates(oddsEvent: OddsEvent) {
 
   for (const bookmaker of oddsEvent.bookmakers || []) {
     for (const market of bookmaker.markets || []) {
-      if (!["h2h", "totals"].includes(market.key)) continue;
+      if (!["h2h", "totals", "spreads"].includes(market.key)) continue;
       const overround = market.outcomes.reduce(
         (sum, outcome) =>
           outcome.price > 1 ? sum + 1 / outcome.price : sum,
@@ -181,7 +232,7 @@ export async function getWorldCupOdds(): Promise<{
   const url = new URL(`${ODDS_API_BASE}/sports/${SPORT_KEY}/odds`);
   url.searchParams.set("apiKey", ODDS_API_KEY);
   url.searchParams.set("regions", "eu");
-  url.searchParams.set("markets", "h2h,totals");
+  url.searchParams.set("markets", "h2h,totals,spreads");
   url.searchParams.set("oddsFormat", "decimal");
 
   const response = await fetch(url, {
@@ -191,7 +242,7 @@ export async function getWorldCupOdds(): Promise<{
       cf: {
         cacheEverything: true,
         cacheTtl: 14400,
-        cacheKey: `${ODDS_API_BASE}/cache/${SPORT_KEY}/eu/h2h-totals`,
+        cacheKey: `${ODDS_API_BASE}/cache/${SPORT_KEY}/eu/h2h-totals-spreads`,
       },
     } as Record<string, unknown>),
   });

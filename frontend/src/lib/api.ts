@@ -22,10 +22,17 @@ export const api = {
   },
   getEvent: (id: number) => apiFetch<Event>(`/api/v1/events/${id}`),
   getEventOdds: (id: number) => apiFetch<OddsSnapshot[]>(`/api/v1/events/${id}/odds`),
+  getMatchBetBuilder: (id: number) =>
+    apiFetch<MatchBetBuilder>(`/api/v1/events/${id}/bet-builder`),
+  generateSameMatchParlay: (id: number, data: MatchParlayRequest) =>
+    apiFetch<MatchParlayResponse>(`/api/v1/events/${id}/same-match-parlay`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   getPlayerInsights: (id: number) =>
     apiFetch<PlayerInsights>(`/api/v1/events/${id}/players`),
   getMatchContext: (id: number) =>
-    apiFetch<MatchContext>(`/api/v1/ai/context/${id}?v=3`),
+    apiFetch<MatchContext>(`/api/v1/ai/context/${id}?v=4`),
   predictEvent: (id: number) =>
     apiFetch<Prediction>(`/api/v1/events/${id}/predict`, { method: "POST" }),
 
@@ -117,6 +124,55 @@ export interface OddsSnapshot {
   selections: { key: string; name: string; price: number; fair_prob: number; point?: number }[];
   overround: number;
   captured_at: string;
+}
+
+export interface BetSuggestion {
+  id: string;
+  category: string;
+  market: string;
+  selection: string;
+  label: string;
+  probability: number;
+  fair_odds: number;
+  offered_odds?: number;
+  bookmaker?: string;
+  edge?: number;
+  ev?: number;
+  risk_level: string;
+  confidence: "low" | "medium" | "high";
+  source: "bookmaker" | "model";
+  rationale: string;
+  conflict_key: string;
+  tags: string[];
+}
+
+export interface MatchBetBuilder {
+  event_id: number;
+  generated_at: string;
+  suggestions: BetSuggestion[];
+  bookmaker_markets: number;
+  model_markets: number;
+  preferred_bookmakers: string[];
+  warnings: string[];
+}
+
+export interface MatchParlayRequest {
+  target_odds: number;
+  stake?: number;
+  max_legs?: number;
+}
+
+export interface MatchParlayResponse {
+  success: boolean;
+  target_odds?: number;
+  message?: string;
+  parlay?: {
+    legs: BetSuggestion[];
+    total_odds: number;
+    estimated_probability: number;
+    potential_return?: number;
+    warnings: string[];
+  };
 }
 
 export interface PlayerProjection {

@@ -3,8 +3,11 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   api,
+  type BetSuggestion,
   type Event,
+  type MatchBetBuilder,
   type MatchContext,
+  type MatchParlayResponse,
   type PlayerInsights,
 } from "@/lib/api";
 import { AlertTriangle, Loader2, RefreshCw, TrendingUp, Calculator, Target, BarChart2, ChevronDown, ChevronUp, Users, Sparkles, ExternalLink } from "lucide-react";
@@ -17,6 +20,7 @@ export default function AnalysePage() {
   const [predicting, setPredicting] = useState(false);
   const [playerInsights, setPlayerInsights] = useState<PlayerInsights | null>(null);
   const [matchContext, setMatchContext] = useState<MatchContext | null>(null);
+  const [betBuilder, setBetBuilder] = useState<MatchBetBuilder | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(true);
 
   const load = async () => {
@@ -37,12 +41,16 @@ export default function AnalysePage() {
     Promise.allSettled([
       api.getPlayerInsights(Number(id)),
       api.getMatchContext(Number(id)),
-    ]).then(([playersResult, contextResult]) => {
+      api.getMatchBetBuilder(Number(id)),
+    ]).then(([playersResult, contextResult, builderResult]) => {
       if (playersResult.status === "fulfilled") {
         setPlayerInsights(playersResult.value);
       }
       if (contextResult.status === "fulfilled") {
         setMatchContext(contextResult.value);
+      }
+      if (builderResult.status === "fulfilled") {
+        setBetBuilder(builderResult.value);
       }
       setInsightsLoading(false);
     });
@@ -206,6 +214,13 @@ export default function AnalysePage() {
 
       {matchContext && <ContextPanel context={matchContext} />}
 
+      {betBuilder && (
+        <>
+          <SameMatchParlayPanel eventId={Number(id)} />
+          <BetSuggestionsPanel builder={betBuilder} />
+        </>
+      )}
+
       {playerInsights && <PlayerInsightsPanel insights={playerInsights} />}
 
       {/* Calculateur de paris */}
@@ -229,7 +244,7 @@ export default function AnalysePage() {
                   </div>
                 </div>
                 <div className="text-right shrink-0">
-                  <div className="text-2xl font-black text-white">{vb.odds}</div>
+                  <div className="text-2xl font-black text-white">Cote {Number(vb.odds).toFixed(2)}</div>
                   <div className="text-xs text-green-400 font-bold">+{(vb.edge * 100).toFixed(1)}% edge</div>
                   <div className="text-xs text-yellow-400">Kelly {(vb.kelly_stake_pct * 100).toFixed(1)}%</div>
                 </div>
@@ -243,6 +258,258 @@ export default function AnalysePage() {
 }
 
 /* ── Calculateur de paris ───────────────────────────────────────── */
+function formatOdds(value?: number) {
+  if (!value) return "Cote modele";
+  return `Cote ${value.toFixed(2)}`;
+}
+
+function displayedOdds(suggestion: BetSuggestion) {
+  return suggestion.offered_odds || Number((suggestion.fair_odds * 0.94).toFixed(2));
+}
+
+function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
+  const grouped = builder.suggestions.reduce<Record<string, BetSuggestion[]>>(
+    (acc, suggestion) => {
+      acc[suggestion.category] = acc[suggestion.category] || [];
+      acc[suggestion.category].push(suggestion);
+      return acc;
+    },
+    {},
+  );
+  const categoryOrder = [
+    "Resultat",
+    "Buts",
+    "Buts equipe",
+    "Handicap",
+    "Defense",
+    "Scenario",
+    "Joueurs",
+    "Score exact",
+  ];
+
+  return (
+    <div className="card space-y-4">
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+        <div>
+          <h3 className="font-semibold text-white flex items-center gap-2">
+            <TrendingUp size={16} className="text-green-400" />
+            Propositions de paris enrichies
+          </h3>
+          <p className="text-xs text-gray-500 mt-1">
+            Cotes bookmaker quand disponibles, sinon cote estimee par le modele.
+          </p>
+        </div>
+        <div className="text-xs text-gray-400 md:text-right">
+          <div>{builder.bookmaker_markets} marches bookmaker lus</div>
+          <div>{builder.model_markets} marches derives modele</div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {builder.preferred_bookmakers.map((bookmaker) => (
+          <span key={bookmaker} className="rounded-full bg-gray-800 px-2.5 py-1 text-xs text-gray-400">
+            {bookmaker}
+          </span>
+        ))}
+      </div>
+
+      <div className="space-y-4">
+        {categoryOrder
+          .filter((category) => grouped[category]?.length)
+          .map((category) => (
+            <div key={category}>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+                {category}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {grouped[category].slice(0, category === "Joueurs" ? 8 : 6).map((suggestion) => (
+                  <SuggestionCard key={suggestion.id} suggestion={suggestion} />
+                ))}
+              </div>
+            </div>
+          ))}
+      </div>
+
+      <div className="rounded-xl border border-yellow-900/70 bg-yellow-950/20 p-3 space-y-1">
+        {builder.warnings.map((warning, index) => (
+          <div key={index} className="text-xs text-yellow-200/75">
+            {warning}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
+  const playable = suggestion.source === "bookmaker" && suggestion.offered_odds;
+  const edge = suggestion.edge;
+
+  return (
+    <div className="rounded-xl bg-gray-800/70 p-3 border border-gray-800">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-white text-sm">{suggestion.label}</div>
+          <div className="text-xs text-gray-500 mt-1">{suggestion.market}</div>
+        </div>
+        <span
+          className={clsx(
+            "shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold",
+            suggestion.risk_level === "prudent"
+              ? "bg-green-900/40 text-green-400"
+              : suggestion.risk_level === "balanced"
+                ? "bg-yellow-900/40 text-yellow-400"
+                : "bg-red-900/40 text-red-400",
+          )}
+        >
+          {suggestion.risk_level}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <Stat label="Modele" value={`${(suggestion.probability * 100).toFixed(1)}%`} />
+        <Stat
+          label={playable ? suggestion.bookmaker || "Book" : "Estimation"}
+          value={formatOdds(playable ? suggestion.offered_odds : displayedOdds(suggestion))}
+        />
+        <Stat
+          label="Edge"
+          value={edge == null ? "n/a" : `${edge > 0 ? "+" : ""}${(edge * 100).toFixed(1)}%`}
+          highlight={edge == null ? undefined : edge > 0 ? "green" : "red"}
+        />
+      </div>
+
+      <p className="text-xs text-gray-500 mt-3">{suggestion.rationale}</p>
+      {!playable && (
+        <p className="text-[11px] text-yellow-500/80 mt-2">
+          Cote non confirmee par bookmaker sur ce marche.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SameMatchParlayPanel({ eventId }: { eventId: number }) {
+  const [targetOdds, setTargetOdds] = useState("3.00");
+  const [stake, setStake] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<MatchParlayResponse | null>(null);
+  const [error, setError] = useState("");
+
+  const generate = async () => {
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const response = await api.generateSameMatchParlay(eventId, {
+        target_odds: Number(targetOdds),
+        stake: stake ? Number(stake) : undefined,
+        max_legs: 4,
+      });
+      setResult(response);
+      if (!response.success) setError(response.message || "Aucun combine recommande.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Generation impossible.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="card space-y-4 border border-cyan-900/50 bg-cyan-950/10">
+      <div>
+        <h3 className="font-semibold text-white flex items-center gap-2">
+          <Target size={16} className="text-cyan-400" />
+          Construire un combine sur ce match
+        </h3>
+        <p className="text-xs text-gray-500 mt-1">
+          Entre une cote cible: l'outil cherche la combinaison la plus prudente possible sur ce match.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3">
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Cote cible</label>
+          <input
+            type="number"
+            min="1.1"
+            step="0.1"
+            value={targetOdds}
+            onChange={(event) => setTargetOdds(event.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 outline-none"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Mise optionnelle</label>
+          <input
+            type="number"
+            min="1"
+            step="1"
+            placeholder="ex: 20"
+            value={stake}
+            onChange={(event) => setStake(event.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 outline-none"
+          />
+        </div>
+        <button
+          onClick={generate}
+          disabled={loading || Number(targetOdds) < 1.1}
+          className="btn-primary self-end min-w-[160px]"
+        >
+          {loading ? "Calcul..." : "Generer"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-yellow-900 bg-yellow-950/30 p-3 text-sm text-yellow-200">
+          {error}
+        </div>
+      )}
+
+      {result?.success && result.parlay && (
+        <div className="rounded-xl bg-gray-900/80 border border-cyan-900/60 p-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <Stat label="Cote visee" value={formatOdds(result.target_odds)} />
+            <Stat label="Cote trouvee" value={formatOdds(result.parlay.total_odds)} highlight="green" />
+            <Stat label="Reussite approx." value={`${(result.parlay.estimated_probability * 100).toFixed(1)}%`} />
+            <Stat
+              label="Gain potentiel"
+              value={result.parlay.potential_return ? `${result.parlay.potential_return.toFixed(2)} EUR` : "n/a"}
+            />
+          </div>
+
+          <div className="space-y-2">
+            {result.parlay.legs.map((leg, index) => (
+              <div key={leg.id} className="flex items-center justify-between gap-3 rounded-lg bg-gray-800 px-3 py-2">
+                <div>
+                  <div className="text-sm font-semibold text-white">
+                    {index + 1}. {leg.label}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Probabilite modele {(leg.probability * 100).toFixed(1)}%
+                    {" "}· {leg.source === "bookmaker" ? leg.bookmaker : "cote modele estimee"}
+                  </div>
+                </div>
+                <div className="text-right font-bold text-cyan-300">
+                  {formatOdds(displayedOdds(leg))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-3 space-y-1">
+            {result.parlay.warnings.map((warning, index) => (
+              <div key={index} className="text-xs text-yellow-500/80">
+                {warning}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BetCalculator({ event, pred }: { event: Event; pred: any }) {
   const [odds, setOdds] = useState("");
   const [stake, setStake] = useState("");

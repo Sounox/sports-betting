@@ -219,7 +219,7 @@ function internalFactors(
   if (valueBets.length) {
     factors.push({
       text: `Value bets detectes: ${valueBets
-        .map((bet) => `${bet.label} @ ${bet.odds} (${bet.bookmaker}, edge ${pct(bet.edge)})`)
+        .map((bet) => `${bet.label}, cote ${Number(bet.odds).toFixed(2)} chez ${bet.bookmaker}, edge ${pct(bet.edge)}`)
         .join("; ")}.`,
       impact: "neutral",
       confidence: predictionConfidence(event),
