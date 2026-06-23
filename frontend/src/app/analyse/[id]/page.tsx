@@ -264,7 +264,7 @@ function formatOdds(value?: number) {
 }
 
 function displayedOdds(suggestion: BetSuggestion) {
-  return suggestion.offered_odds || Number((suggestion.fair_odds * 0.94).toFixed(2));
+  return suggestion.offered_odds || suggestion.fair_odds;
 }
 
 function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {

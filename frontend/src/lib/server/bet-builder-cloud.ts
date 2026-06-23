@@ -139,9 +139,7 @@ function makeSuggestion(input: {
 }
 
 function oddsForSuggestion(suggestion: BetSuggestion) {
-  // If a bookmaker price is available, use it. Otherwise use a cautious model
-  // estimate, haircut by 6% to simulate bookmaker margin.
-  return suggestion.offered_odds || round(suggestion.fair_odds * 0.94, 2);
+  return suggestion.offered_odds || suggestion.fair_odds;
 }
 
 function buildSuggestions(
