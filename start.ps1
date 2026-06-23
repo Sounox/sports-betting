@@ -1,46 +1,55 @@
-# Script de démarrage Windows PowerShell
-# Usage : .\start.ps1
+# SportsBet Analyzer — Script de démarrage (sans Docker)
+# Double-cliquez sur ce fichier ou lancez : .\start.ps1
 
-Write-Host "SportsBet Analyzer — Démarrage" -ForegroundColor Green
+$ErrorActionPreference = "SilentlyContinue"
 
-# Vérifier que Docker est lancé
-try {
-    docker info | Out-Null
-} catch {
-    Write-Host "Docker n'est pas lancé. Démarrez Docker Desktop." -ForegroundColor Red
-    exit 1
+Write-Host ""
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "  SportsBet Analyzer — Démarrage" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host ""
+
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# ── Backend ──────────────────────────────────────────────────────────
+# Vérifier si déjà lancé
+$backendRunning = (Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue) -ne $null
+if (-not $backendRunning) {
+    Write-Host "[1/2] Démarrage du backend FastAPI..." -ForegroundColor Cyan
+    $env:DATABASE_URL = "sqlite:///./sportsbet.db"
+    $env:SECRET_KEY = "dev-secret-change-in-prod"
+    $env:ODDS_API_KEY = "baa56883db051af74cc48c5512bfc426"
+    $env:FOOTBALL_DATA_API_KEY = "23589c0d13d34aa1bc32e5f2017b7e34"
+    Start-Process -FilePath "python" `
+        -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port 8000" `
+        -WorkingDirectory "$root\backend" `
+        -WindowStyle Minimized
+    Start-Sleep -Seconds 4
+} else {
+    Write-Host "[1/2] Backend déjà actif sur :8000" -ForegroundColor Green
 }
 
-# Copier .env si pas existant
-if (-not (Test-Path ".env")) {
-    Copy-Item ".env.example" ".env"
-    Write-Host ".env créé. Editez-le pour ajouter vos clés API." -ForegroundColor Yellow
-    notepad .env
-    Read-Host "Appuyez sur Entrée après avoir sauvegardé le .env"
+# ── Frontend ─────────────────────────────────────────────────────────
+$frontendRunning = (Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue) -ne $null
+if (-not $frontendRunning) {
+    Write-Host "[2/2] Démarrage du frontend Next.js..." -ForegroundColor Cyan
+    Start-Process -FilePath "npm" `
+        -ArgumentList "run dev" `
+        -WorkingDirectory "$root\frontend" `
+        -WindowStyle Minimized
+    Start-Sleep -Seconds 6
+} else {
+    Write-Host "[2/2] Frontend déjà actif sur :3000" -ForegroundColor Green
 }
 
-# Démarrer les services
-Write-Host "Démarrage des services..." -ForegroundColor Cyan
-docker-compose up -d postgres redis
-
-Write-Host "Attente de la base de données..." -ForegroundColor Cyan
-Start-Sleep -Seconds 8
-
-Write-Host "Démarrage du backend et worker..." -ForegroundColor Cyan
-docker-compose up -d backend worker
-
-Write-Host "Attente du backend..." -ForegroundColor Cyan
-Start-Sleep -Seconds 10
-
-Write-Host "Démarrage du frontend..." -ForegroundColor Cyan
-docker-compose up -d frontend
-
 Write-Host ""
-Write-Host "Tous les services sont démarrés !" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Green
+Write-Host "  Tout est prêt !" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Frontend  : http://localhost:3000" -ForegroundColor White
-Write-Host "API       : http://localhost:8000" -ForegroundColor White
-Write-Host "API Docs  : http://localhost:8000/docs" -ForegroundColor White
+Write-Host "  Dashboard  : http://localhost:3000" -ForegroundColor White
+Write-Host "  API Docs   : http://localhost:8000/docs" -ForegroundColor White
 Write-Host ""
-Write-Host "Pour importer les données de la Coupe du Monde :" -ForegroundColor Yellow
-Write-Host "  Allez sur http://localhost:3000/config et cliquez 'Importer' sur WC" -ForegroundColor Yellow
+
+# Ouvrir le navigateur automatiquement
+Start-Process "http://localhost:3000"
