@@ -28,6 +28,38 @@ function extractTag(xml: string, tag: string) {
   return match ? decodeXml(match[1]) : "";
 }
 
+function normalizeText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isRecentEnough(publishedAt?: string) {
+  if (!publishedAt) return false;
+  const timestamp = Date.parse(publishedAt);
+  if (Number.isNaN(timestamp)) return false;
+  return Date.now() - timestamp <= 21 * 24 * 60 * 60 * 1000;
+}
+
+function isRelevantNews(source: NewsSource, event: Event) {
+  const title = normalizeText(source.title);
+  const home = normalizeText(event.home_team);
+  const away = normalizeText(event.away_team);
+  const mentionsHome = home && title.includes(home);
+  const mentionsAway = away && title.includes(away);
+  const contextWords = [
+    "world cup",
+    "prediction",
+    "lineup",
+    "injury",
+    "suspension",
+    "team news",
+    "odds",
+    "preview",
+  ];
+  const hasContext = contextWords.some((word) => title.includes(word));
+
+  return isRecentEnough(source.published_at) && hasContext && (mentionsHome || mentionsAway);
+}
+
 async function fetchNews(event: Event): Promise<NewsSource[]> {
   const queries = [
     `"${event.home_team}" "${event.away_team}" football World Cup`,
@@ -67,7 +99,7 @@ async function fetchNews(event: Event): Promise<NewsSource[]> {
         source: sourceMatch ? decodeXml(sourceMatch[1]) : undefined,
       };
       const key = source.url || source.title;
-      if (!key || seen.has(key)) continue;
+      if (!key || seen.has(key) || !isRelevantNews(source, event)) continue;
       seen.add(key);
       sources.push(source);
     }
