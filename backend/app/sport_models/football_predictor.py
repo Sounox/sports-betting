@@ -8,6 +8,9 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models import Event, EventResult, Competition, Team, TeamRating, Prediction
+
+# Compétitions de sélections nationales → toujours Elo (pas de Dixon-Coles club)
+NATIONAL_COMP_CODES = {"WC", "WCQ", "EC", "ECQ", "NFL", "AFCON", "COPA"}
 from app.sport_models.dixon_coles import (
     DixonColesPredictor, DixonColesParams, MatchData, fit_dixon_coles
 )
@@ -21,21 +24,37 @@ _model_cache: dict[int, dict] = {}
 _elo_cache: dict[int, EloSystem] = {}
 
 
-def get_historical_matches(db: Session, competition_id: int, limit: int = 500) -> list[MatchData]:
-    """Récupère les matchs terminés pour entraîner le modèle."""
-    results = (
+def get_historical_matches(db: Session, competition_id: int, limit: int = 800) -> list[MatchData]:
+    """
+    Récupère les matchs terminés pour entraîner le modèle.
+    Si la compétition a moins de 100 matchs (ex: CdM), utilise toutes les données disponibles
+    pour estimer les forces d'attaque/défense via les clubs.
+    """
+    comp_results = (
         db.query(Event, EventResult)
         .join(EventResult, Event.id == EventResult.event_id)
         .filter(Event.competition_id == competition_id)
         .filter(Event.status == "FINISHED")
         .filter(EventResult.home_score.isnot(None))
-        .order_by(Event.scheduled_at.desc())
-        .limit(limit)
         .all()
     )
 
+    if len(comp_results) >= 100:
+        rows = comp_results[:limit]
+    else:
+        # Pas assez de données spécifiques → entraîner sur toutes les compétitions
+        rows = (
+            db.query(Event, EventResult)
+            .join(EventResult, Event.id == EventResult.event_id)
+            .filter(Event.status == "FINISHED")
+            .filter(EventResult.home_score.isnot(None))
+            .order_by(Event.scheduled_at.desc())
+            .limit(limit)
+            .all()
+        )
+
     matches = []
-    for event, result in results:
+    for event, result in rows:
         matches.append(MatchData(
             home_team=event.home_team.name,
             away_team=event.away_team.name,
@@ -163,7 +182,14 @@ def predict_match(db: Session, event_id: int, force_retrain: bool = False) -> Op
     home_name = event.home_team.name
     away_name = event.away_team.name
 
-    params, elo = get_or_train_model(db, event.competition_id, force_retrain)
+    # Pour les compétitions de sélections nationales, Elo FIFA est plus fiable que Dixon-Coles clubs
+    comp = db.query(Competition).filter(Competition.id == event.competition_id).first()
+    is_national = comp and comp.fd_code in NATIONAL_COMP_CODES
+
+    if is_national:
+        params, elo = None, EloSystem()
+    else:
+        params, elo = get_or_train_model(db, event.competition_id, force_retrain)
 
     warnings = []
     data_quality = "poor"

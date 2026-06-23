@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.providers.football_data import football_data_client, SUPPORTED_COMPETITIONS
 from app.providers.odds_api import odds_api_client, SPORT_KEYS
+from sqlalchemy.orm import aliased
 from app.models import Competition, Team, Event, EventResult, OddsSnapshot, Prediction
 from app.database import engine
 from app.models import Base as _Base
@@ -284,16 +285,15 @@ def _store_odds(db: Session, normalized: dict):
     window_start = commence - timedelta(hours=12)
     window_end   = commence + timedelta(hours=12)
 
-    # Correspondance par noms d'équipes (simplifiée)
     home_name = normalized["home_team"]
     away_name = normalized["away_team"]
 
+    HomeTeam = aliased(Team, name="home_team")
     event = (
         db.query(Event)
-        .join(Event.home_team)
-        .join(Event.away_team)
+        .join(HomeTeam, Event.home_team_id == HomeTeam.id)
         .filter(Event.scheduled_at.between(window_start, window_end))
-        .filter(Team.name.ilike(f"%{home_name[:8]}%"))
+        .filter(HomeTeam.name.ilike(f"%{home_name[:8]}%"))
         .first()
     )
 

@@ -85,8 +85,12 @@ class ValueCalculator:
             .all()
         )
 
-        best: dict[str, dict] = {}
+        # Collecter toutes les cotes par clé pour filtrer les outliers
+        all_prices: dict[str, list[float]] = {}
+        raw: dict[str, list[dict]] = {}
         for snap in snapshots:
+            if "lay" in snap.market:
+                continue  # ignorer les marchés lay (exchange)
             market = snap.market
             overround = snap.overround or compute_overround(snap.selections)
             for sel in snap.selections:
@@ -94,18 +98,32 @@ class ValueCalculator:
                 price = sel.get("price", 0)
                 if price <= 1:
                     continue
-                if key not in best or price > best[key]["price"]:
-                    implied = 1 / price
-                    best[key] = {
-                        "price": price,
-                        "bookmaker": snap.bookmaker,
-                        "implied_prob": implied,
-                        "fair_prob": compute_fair_prob(implied, overround),
-                        "overround": overround,
-                        "market": market,
-                        "selection_key": sel["key"],
-                        "selection_name": sel.get("name", sel["key"]),
-                    }
+                all_prices.setdefault(key, []).append(price)
+                raw.setdefault(key, []).append({
+                    "price": price,
+                    "bookmaker": snap.bookmaker,
+                    "overround": overround,
+                    "market": market,
+                    "selection_key": sel["key"],
+                    "selection_name": sel.get("name", sel["key"]),
+                })
+
+        best: dict[str, dict] = {}
+        for key, prices in all_prices.items():
+            if not prices:
+                continue
+            median_price = sorted(prices)[len(prices) // 2]
+            # Filtrer les outliers (prix > 3× médiane = données erronées)
+            valid = [r for r in raw[key] if r["price"] <= median_price * 3]
+            if not valid:
+                valid = raw[key]
+            best_entry = max(valid, key=lambda r: r["price"])
+            implied = 1 / best_entry["price"]
+            best[key] = {
+                **best_entry,
+                "implied_prob": implied,
+                "fair_prob": compute_fair_prob(implied, best_entry["overround"]),
+            }
         return best
 
     def find_value_bets(
@@ -124,19 +142,48 @@ class ValueCalculator:
         if not best_odds:
             return []
 
+        # Récupérer les noms d'équipes pour faire correspondre home/away aux clés bookmaker
+        event = db.query(Event).filter(Event.id == event_id).first()
+        home_key = event.home_team.name.lower().replace(" ", "_") if event else ""
+        away_key = event.away_team.name.lower().replace(" ", "_") if event else ""
+
+        def find_odds_key(model_key: str) -> Optional[str]:
+            """Cherche la clé bookmaker correspondant à une clé modèle."""
+            # Mapping direct h2h home/away/draw par nom d'équipe
+            if model_key == "1x2_home":
+                for k in best_odds:
+                    if k.startswith("h2h_") and any(
+                        part in k for part in home_key.split("_")[:2] if len(part) > 3
+                    ):
+                        return k
+                # fallback: première clé h2h non-draw
+                for k in best_odds:
+                    if k.startswith("h2h_") and "draw" not in k and away_key.split("_")[0][:4] not in k:
+                        return k
+            elif model_key == "1x2_away":
+                for k in best_odds:
+                    if k.startswith("h2h_") and any(
+                        part in k for part in away_key.split("_")[:2] if len(part) > 3
+                    ):
+                        return k
+            elif model_key == "1x2_draw":
+                return "h2h_draw" if "h2h_draw" in best_odds else None
+            elif "over" in model_key:
+                return next((k for k in best_odds if k.startswith("totals_over")), None)
+            elif "under" in model_key:
+                return next((k for k in best_odds if k.startswith("totals_under")), None)
+            elif "btts" in model_key:
+                suffix = "yes" if "yes" in model_key else "no"
+                return next((k for k in best_odds if f"btts_{suffix}" in k), None)
+            return None
+
         value_bets = []
 
         for model_key, model_prob in model_probs.items():
             if model_prob is None:
                 continue
 
-            # Chercher la cote correspondante
-            odds_key = None
-            for k in best_odds:
-                if model_key in k or k in model_key:
-                    odds_key = k
-                    break
-
+            odds_key = find_odds_key(model_key)
             if not odds_key:
                 continue
 
