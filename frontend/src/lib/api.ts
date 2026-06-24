@@ -77,6 +77,10 @@ export const api = {
     apiFetch<EventHistoryResponse>(
       `/api/v1/admin/history/events/${id}?limit=${limit}`,
     ),
+  getEventOddsHistory: (id: number, includeBase = false) =>
+    apiFetch<EventOddsHistoryResponse>(
+      `/api/v1/admin/history/events/${id}?limit=150&odds_analysis=true&analysis_only=true&include_base=${includeBase}`,
+    ),
   getPerformanceSummary: () =>
     apiFetch<PerformanceSummary>("/api/v1/admin/performance/summary"),
   settlePerformance: () =>
@@ -510,6 +514,8 @@ export interface HistorySnapshotResponse extends HistoryStatus {
   upcoming_seen?: number;
   predictions_saved?: number;
   odds_saved?: number;
+  advanced_odds_events?: number;
+  advanced_odds_rows_saved?: number;
   value_bets_saved?: number;
 }
 
@@ -520,6 +526,50 @@ export interface EventHistoryResponse {
   predictions?: Record<string, any>[];
   odds?: Record<string, any>[];
   value_bets?: Record<string, any>[];
+  odds_analysis?: EventOddsHistoryResponse;
+}
+
+export interface OddsMarketSummary {
+  market: string;
+  label: string;
+  category: string;
+  rows: number;
+  bookmakers: number;
+  selections: number;
+}
+
+export interface OddsMovement {
+  market: string;
+  market_label: string;
+  category: string;
+  selection: string;
+  bookmaker: string;
+  point?: number | null;
+  opening_price: number;
+  latest_price: number;
+  price_delta: number;
+  price_delta_pct: number;
+  implied_prob_open?: number | null;
+  implied_prob_latest?: number | null;
+  implied_prob_delta?: number | null;
+  direction: "shortening" | "drifting" | "stable";
+  signal_strength: "low" | "medium" | "high";
+  observations: number;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface EventOddsHistoryResponse {
+  enabled: boolean;
+  message?: string;
+  event?: Record<string, any> | null;
+  generated_at?: string;
+  rows_seen?: number;
+  rows_used?: number;
+  player_rows?: number;
+  markets?: OddsMarketSummary[];
+  movements?: OddsMovement[];
+  warnings?: string[];
 }
 
 export interface PerformanceSummary {
@@ -561,6 +611,8 @@ export interface DataRefreshResponse {
   upcoming_seen?: number;
   predictions_saved?: number;
   odds_saved?: number;
+  advanced_odds_events?: number;
+  advanced_odds_rows_saved?: number;
   value_bets_saved?: number;
   events_settled?: number;
   prediction_markets_settled?: number;

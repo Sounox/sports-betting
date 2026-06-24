@@ -8,6 +8,8 @@ import {
   type MatchBetBuilder,
   type MatchContext,
   type MatchParlayResponse,
+  type EventOddsHistoryResponse,
+  type OddsMovement,
   type PlayerInsights,
 } from "@/lib/api";
 import { AlertTriangle, Loader2, RefreshCw, TrendingUp, Calculator, Target, BarChart2, ChevronDown, ChevronUp, Users, Sparkles, ExternalLink } from "lucide-react";
@@ -21,6 +23,7 @@ export default function AnalysePage() {
   const [playerInsights, setPlayerInsights] = useState<PlayerInsights | null>(null);
   const [matchContext, setMatchContext] = useState<MatchContext | null>(null);
   const [betBuilder, setBetBuilder] = useState<MatchBetBuilder | null>(null);
+  const [oddsHistory, setOddsHistory] = useState<EventOddsHistoryResponse | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(true);
 
   const load = async () => {
@@ -42,7 +45,8 @@ export default function AnalysePage() {
       api.getPlayerInsights(Number(id)),
       api.getMatchContext(Number(id)),
       api.getMatchBetBuilder(Number(id)),
-    ]).then(([playersResult, contextResult, builderResult]) => {
+      api.getEventOddsHistory(Number(id)),
+    ]).then(([playersResult, contextResult, builderResult, oddsHistoryResult]) => {
       if (playersResult.status === "fulfilled") {
         setPlayerInsights(playersResult.value);
       }
@@ -51,6 +55,9 @@ export default function AnalysePage() {
       }
       if (builderResult.status === "fulfilled") {
         setBetBuilder(builderResult.value);
+      }
+      if (oddsHistoryResult.status === "fulfilled") {
+        setOddsHistory(oddsHistoryResult.value);
       }
       setInsightsLoading(false);
     });
@@ -217,6 +224,7 @@ export default function AnalysePage() {
       {betBuilder && (
         <>
           <SameMatchParlayPanel eventId={Number(id)} />
+          {oddsHistory && <OddsHistoryPanel history={oddsHistory} />}
           <BetSuggestionsPanel builder={betBuilder} />
         </>
       )}
@@ -535,6 +543,132 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function formatSignedPct(value?: number | null) {
+  if (value == null || Number.isNaN(value)) return "n/a";
+  return `${value > 0 ? "+" : ""}${(value * 100).toFixed(1)} pts`;
+}
+
+function movementCopy(movement: OddsMovement) {
+  if (movement.direction === "shortening") {
+    return {
+      label: "Cote en baisse",
+      detail: "le marche donne plus de poids a cette selection",
+      className: "bg-green-900/35 text-green-300 border-green-800/60",
+    };
+  }
+  if (movement.direction === "drifting") {
+    return {
+      label: "Cote en hausse",
+      detail: "le marche se refroidit sur cette selection",
+      className: "bg-yellow-900/30 text-yellow-300 border-yellow-800/60",
+    };
+  }
+  return {
+    label: "Stable",
+    detail: "pas de mouvement exploitable pour le moment",
+    className: "bg-gray-800 text-gray-400 border-gray-700",
+  };
+}
+
+function OddsHistoryPanel({ history }: { history: EventOddsHistoryResponse }) {
+  const movements = history.movements || [];
+  const playerMovements = movements
+    .filter((movement) => movement.market.startsWith("player_"))
+    .slice(0, 8);
+  const visibleMovements = playerMovements.length
+    ? playerMovements
+    : movements.slice(0, 8);
+  const marketSummaries = history.markets || [];
+
+  return (
+    <div className="card space-y-4 border border-indigo-900/50 bg-indigo-950/10">
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+        <div>
+          <h3 className="font-semibold text-white flex items-center gap-2">
+            <BarChart2 size={16} className="text-indigo-300" />
+            Historique des cotes avancees
+          </h3>
+          <p className="text-xs text-gray-500 mt-1">
+            Signaux issus des snapshots automatiques: joueurs, buteurs, tirs cadres, cartons et marches buts.
+          </p>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-center text-xs min-w-[280px]">
+          <Stat label="Lignes avancees" value={String(history.rows_used || 0)} />
+          <Stat label="Lignes joueurs" value={String(history.player_rows || 0)} highlight={history.player_rows ? "green" : undefined} />
+          <Stat label="Mouvements" value={String(movements.length)} />
+        </div>
+      </div>
+
+      {marketSummaries.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {marketSummaries.slice(0, 7).map((market) => (
+            <span
+              key={market.market}
+              className="rounded-full border border-gray-800 bg-gray-900/80 px-2.5 py-1 text-xs text-gray-300"
+            >
+              {market.label}: {market.selections} selections / {market.bookmakers} books
+            </span>
+          ))}
+        </div>
+      )}
+
+      {visibleMovements.length === 0 ? (
+        <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4 text-sm text-gray-400">
+          Pas encore assez de snapshots avances sur ce match. Les prochains refreshs automatiques rempliront cette zone.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {visibleMovements.map((movement) => (
+            <MovementCard key={`${movement.market}:${movement.bookmaker}:${movement.selection}:${movement.point ?? ""}`} movement={movement} />
+          ))}
+        </div>
+      )}
+
+      <div className="rounded-xl border border-yellow-900/70 bg-yellow-950/20 p-3 space-y-1">
+        {(history.warnings || []).map((warning, index) => (
+          <div key={index} className="text-xs text-yellow-200/75">
+            {warning}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MovementCard({ movement }: { movement: OddsMovement }) {
+  const copy = movementCopy(movement);
+  const line = movement.point == null ? "" : ` ligne ${movement.point}`;
+
+  return (
+    <div className="rounded-xl bg-gray-900/80 border border-gray-800 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs text-gray-500">{movement.market_label}{line}</div>
+          <div className="font-semibold text-white text-sm truncate">{movement.selection}</div>
+          <div className="text-xs text-gray-500 mt-1">{movement.bookmaker}</div>
+        </div>
+        <span className={clsx("shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold", copy.className)}>
+          {copy.label}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <Stat label="Ouverture" value={formatOdds(movement.opening_price)} />
+        <Stat label="Derniere" value={formatOdds(movement.latest_price)} />
+        <Stat
+          label="Proba impl."
+          value={formatSignedPct(movement.implied_prob_delta)}
+          highlight={(movement.implied_prob_delta || 0) > 0 ? "green" : (movement.implied_prob_delta || 0) < 0 ? "red" : undefined}
+        />
+      </div>
+
+      <p className="text-xs text-gray-500 mt-3">
+        {copy.detail}. {movement.observations} observation(s), signal {movement.signal_strength}.
+      </p>
     </div>
   );
 }

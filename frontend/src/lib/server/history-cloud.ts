@@ -120,6 +120,20 @@ interface ValueBetSnapshotRow {
   ev: number | null;
 }
 
+interface OddsPriceSnapshotRow {
+  id: number;
+  event_id: number;
+  captured_at: string;
+  scheduled_at: string;
+  bookmaker: string;
+  market: string;
+  selection: string;
+  price: number;
+  point: number | null;
+  fair_prob: number | null;
+  overround: number | null;
+}
+
 interface FinishedEventRow {
   event_id: number;
   home_team: string;
@@ -769,6 +783,197 @@ export async function getEventHistory(eventId: number, limit = 50) {
     predictions: predictions.results,
     odds: odds.results,
     value_bets: valueBets.results,
+  };
+}
+
+const ADVANCED_ODDS_MARKETS = new Set([
+  "btts",
+  "draw_no_bet",
+  "team_totals",
+  "player_goal_scorer_anytime",
+  "player_assists",
+  "player_shots_on_target",
+  "player_to_receive_card",
+]);
+
+function marketDisplayLabel(market: string) {
+  const labels: Record<string, string> = {
+    btts: "Les 2 equipes marquent",
+    draw_no_bet: "Nul rembourse",
+    team_totals: "Buts equipe",
+    h2h: "Resultat",
+    spreads: "Handicap",
+    totals: "Total buts",
+    player_goal_scorer_anytime: "Buteur",
+    player_assists: "Passe decisive",
+    player_shots_on_target: "Tirs cadres",
+    player_to_receive_card: "Carton joueur",
+  };
+  return labels[market] || market.replace(/_/g, " ");
+}
+
+function marketCategory(market: string) {
+  if (market.startsWith("player_")) return "Joueurs";
+  if (market === "btts" || market === "team_totals") return "Buts";
+  if (market === "draw_no_bet" || market === "h2h" || market === "spreads") {
+    return "Resultat";
+  }
+  return "Marche";
+}
+
+function movementDirection(openingPrice: number, latestPrice: number) {
+  const deltaPct = openingPrice > 0 ? (latestPrice - openingPrice) / openingPrice : 0;
+  if (Math.abs(deltaPct) < 0.005) return "stable";
+  return latestPrice < openingPrice ? "shortening" : "drifting";
+}
+
+export async function getEventOddsHistory(
+  eventId: number,
+  options: { includeBase?: boolean; limit?: number } = {},
+) {
+  const db = getDb();
+  if (!db) return unavailableStatus();
+  await ensureSchema(db);
+
+  const limit = Math.max(100, Math.min(options.limit || 3000, 8000));
+  const includeBase = Boolean(options.includeBase);
+  const [event, odds] = await Promise.all([
+    db.prepare("SELECT * FROM events WHERE event_id = ?").bind(eventId).first(),
+    db
+      .prepare(
+        `SELECT * FROM odds_price_snapshots
+         WHERE event_id = ?
+         ORDER BY captured_at ASC, id ASC
+         LIMIT ?`,
+      )
+      .bind(eventId, limit)
+      .all<OddsPriceSnapshotRow>(),
+  ]);
+
+  const allRows = odds.results || [];
+  const rows = includeBase
+    ? allRows
+    : allRows.filter((row) => ADVANCED_ODDS_MARKETS.has(row.market));
+  const grouped = new Map<string, OddsPriceSnapshotRow[]>();
+  const markets = new Map<
+    string,
+    { market: string; label: string; category: string; rows: number; bookmakers: Set<string>; selections: Set<string> }
+  >();
+
+  for (const row of rows) {
+    const market = markets.get(row.market) || {
+      market: row.market,
+      label: marketDisplayLabel(row.market),
+      category: marketCategory(row.market),
+      rows: 0,
+      bookmakers: new Set<string>(),
+      selections: new Set<string>(),
+    };
+    market.rows += 1;
+    market.bookmakers.add(row.bookmaker);
+    market.selections.add(row.selection);
+    markets.set(row.market, market);
+
+    const key = [
+      row.market,
+      normalize(row.bookmaker),
+      normalize(row.selection),
+      row.point ?? "",
+    ].join(":");
+    const entries = grouped.get(key) || [];
+    entries.push(row);
+    grouped.set(key, entries);
+  }
+
+  const movements = [...grouped.values()]
+    .map((entries) => {
+      const byCapturedAt = new Map<string, OddsPriceSnapshotRow>();
+      for (const entry of entries) byCapturedAt.set(entry.captured_at, entry);
+      const timeline = [...byCapturedAt.values()].sort(
+        (a, b) =>
+          new Date(a.captured_at).getTime() -
+          new Date(b.captured_at).getTime(),
+      );
+      const opening = timeline[0];
+      const latest = timeline[timeline.length - 1];
+      const hasMovementWindow = timeline.length > 1;
+      const openingPrice = Number(opening.price || 0);
+      const latestPrice = hasMovementWindow
+        ? Number(latest.price || 0)
+        : openingPrice;
+      const impliedOpen = openingPrice > 1 ? 1 / openingPrice : null;
+      const impliedLatest = latestPrice > 1 ? 1 / latestPrice : null;
+      const impliedDelta =
+        impliedOpen != null && impliedLatest != null
+          ? impliedLatest - impliedOpen
+          : null;
+      const priceDelta = latestPrice - openingPrice;
+      const priceDeltaPct = openingPrice > 0 ? priceDelta / openingPrice : 0;
+      const absSignal = Math.abs(impliedDelta || priceDeltaPct || 0);
+
+      return {
+        market: latest.market,
+        market_label: marketDisplayLabel(latest.market),
+        category: marketCategory(latest.market),
+        selection: latest.selection,
+        bookmaker: latest.bookmaker,
+        point: latest.point,
+        opening_price: openingPrice,
+        latest_price: latestPrice,
+        price_delta: Number(priceDelta.toFixed(4)),
+        price_delta_pct: Number(priceDeltaPct.toFixed(4)),
+        implied_prob_open: impliedOpen == null ? null : Number(impliedOpen.toFixed(4)),
+        implied_prob_latest:
+          impliedLatest == null ? null : Number(impliedLatest.toFixed(4)),
+        implied_prob_delta:
+          impliedDelta == null ? null : Number(impliedDelta.toFixed(4)),
+        direction: hasMovementWindow
+          ? movementDirection(openingPrice, latestPrice)
+          : "stable",
+        signal_strength:
+          hasMovementWindow && absSignal >= 0.05
+            ? "high"
+            : hasMovementWindow && absSignal >= 0.025
+              ? "medium"
+              : "low",
+        observations: timeline.length,
+        first_seen_at: opening.captured_at,
+        last_seen_at: latest.captured_at,
+      };
+    })
+    .filter((movement) => movement.latest_price > 1)
+    .sort((a, b) => {
+      const playerBoostA = a.market.startsWith("player_") ? 0.2 : 0;
+      const playerBoostB = b.market.startsWith("player_") ? 0.2 : 0;
+      return (
+        Math.abs(b.implied_prob_delta || b.price_delta_pct) + playerBoostB -
+        (Math.abs(a.implied_prob_delta || a.price_delta_pct) + playerBoostA)
+      );
+    });
+
+  return {
+    enabled: true,
+    event,
+    generated_at: new Date().toISOString(),
+    rows_seen: allRows.length,
+    rows_used: rows.length,
+    player_rows: rows.filter((row) => row.market.startsWith("player_")).length,
+    markets: [...markets.values()]
+      .map((market) => ({
+        market: market.market,
+        label: market.label,
+        category: market.category,
+        rows: market.rows,
+        bookmakers: market.bookmakers.size,
+        selections: market.selections.size,
+      }))
+      .sort((a, b) => b.rows - a.rows),
+    movements: movements.slice(0, 60),
+    warnings: [
+      "Un mouvement de cote est un signal de marche, pas une recommandation automatique.",
+      "Les marches joueurs dependent fortement des compositions et du temps de jeu probable.",
+      "L'historique devient plus fiable a mesure que les refreshs automatiques s'accumulent.",
+    ],
   };
 }
 
