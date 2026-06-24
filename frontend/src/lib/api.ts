@@ -35,6 +35,10 @@ export const api = {
     apiFetch<MatchContext>(`/api/v1/ai/context/${id}?v=4`),
   predictEvent: (id: number) =>
     apiFetch<Prediction>(`/api/v1/events/${id}/predict`, { method: "POST" }),
+  getRecommendations: (params: RecommendationRequest) => {
+    const q = new URLSearchParams(params as any).toString();
+    return apiFetch<RecommendationResponse>(`/api/v1/recommendations?${q}`);
+  },
 
   // Parlays
   generateParlay: (data: ParlayRequest) =>
@@ -282,6 +286,84 @@ export interface ParlayLeg {
   edge: number;
   bookmaker: string;
   ev: number;
+}
+
+export interface RecommendationRequest {
+  hours?: number;
+  bankroll?: number;
+  stake?: number;
+  target_odds?: number;
+  risk_level?: "prudent" | "balanced" | "aggressive";
+  max_legs?: number;
+  min_odds?: number;
+  max_odds?: number;
+}
+
+export interface RecommendationSingle {
+  event_id: number;
+  match: string;
+  competition: string;
+  scheduled_at: string;
+  market: string;
+  selection: string;
+  label: string;
+  odds: number;
+  bookmaker: string;
+  model_prob: number;
+  fair_prob: number;
+  edge: number;
+  ev: number;
+  score: number;
+  confidence: string;
+  risk_level: string;
+  recommended_stake: number;
+  potential_return: number;
+  reasons: string[];
+  warnings: string[];
+}
+
+export interface RecommendationParlay {
+  legs: Array<{
+    event_id: number;
+    match: string;
+    market: string;
+    selection: string;
+    label: string;
+    odds: number;
+    bookmaker: string;
+    model_prob: number;
+    edge: number;
+    score: number;
+  }>;
+  total_odds: number;
+  theoretical_probability: number;
+  expected_value: number;
+  stake: number;
+  potential_return: number;
+  risk_level: string;
+  warnings: string[];
+}
+
+export interface RecommendationResponse {
+  generated_at: string;
+  filters: Required<RecommendationRequest>;
+  summary: {
+    upcoming_events: number;
+    value_bets_considered: number;
+    recommended_singles: number;
+    avoided_events: number;
+    parlay_available: boolean;
+  };
+  singles: RecommendationSingle[];
+  parlays: RecommendationParlay[];
+  avoid: Array<{
+    event_id: number;
+    match: string;
+    scheduled_at: string;
+    reason: string;
+    confidence: string;
+  }>;
+  guardrails: string[];
 }
 
 export interface BankrollData {

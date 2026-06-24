@@ -2,13 +2,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Calendar, Zap, Layers, Search, BarChart2,
+  Calendar, Zap, Layers, Search, BarChart2, Sparkles,
   TrendingUp, DollarSign, Settings, AlertTriangle,
 } from "lucide-react";
 import { clsx } from "clsx";
 
 const NAV = [
   { href: "/",           label: "Matchs du jour",   icon: Calendar },
+  { href: "/recommendations", label: "Recommandations", icon: Sparkles },
   { href: "/value-bets", label: "Value Bets",        icon: Zap },
   { href: "/parlays",    label: "Combinés",           icon: Layers },
   { href: "/analyse",    label: "Analyse match",     icon: Search },
