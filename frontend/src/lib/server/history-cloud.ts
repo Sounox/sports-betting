@@ -76,6 +76,7 @@ interface StorageStatus {
   prediction_snapshots?: number;
   odds_price_snapshots?: number;
   value_bet_snapshots?: number;
+  player_projection_snapshots?: number;
   backtest_results?: number;
   settlement_runs?: number;
   automation_runs?: number;
@@ -263,6 +264,38 @@ CREATE TABLE IF NOT EXISTS automation_runs (
   contexts_warmed INTEGER DEFAULT 0,
   message TEXT
 );
+
+CREATE TABLE IF NOT EXISTS player_projection_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id INTEGER NOT NULL,
+  captured_at TEXT NOT NULL,
+  scheduled_at TEXT,
+  home_team TEXT,
+  away_team TEXT,
+  player_id INTEGER NOT NULL,
+  player_name TEXT NOT NULL,
+  team_name TEXT NOT NULL,
+  position TEXT,
+  tournament_matches INTEGER DEFAULT 0,
+  tournament_goals INTEGER DEFAULT 0,
+  tournament_assists INTEGER DEFAULT 0,
+  expected_goals REAL,
+  anytime_scorer_probability REAL,
+  brace_probability REAL,
+  assist_probability REAL,
+  outside_box_goal_probability REAL,
+  reliability TEXT,
+  evidence_json TEXT,
+  data_freshness_json TEXT,
+  methodology TEXT,
+  warnings_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_projection_event_time
+  ON player_projection_snapshots(event_id, captured_at);
+
+CREATE INDEX IF NOT EXISTS idx_player_projection_player_time
+  ON player_projection_snapshots(player_id, captured_at);
 
 CREATE TABLE IF NOT EXISTS backtest_results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -614,6 +647,10 @@ export async function getHistoryStatus(): Promise<StorageStatus> {
     prediction_snapshots: await countTable(db, "prediction_snapshots"),
     odds_price_snapshots: await countTable(db, "odds_price_snapshots"),
     value_bet_snapshots: await countTable(db, "value_bet_snapshots"),
+    player_projection_snapshots: await countTable(
+      db,
+      "player_projection_snapshots",
+    ),
     backtest_results: await countTable(db, "backtest_results"),
     settlement_runs: await countTable(db, "settlement_runs"),
     automation_runs: await countTable(db, "automation_runs"),
@@ -1126,7 +1163,10 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 
 async function warmEventData(event: Event) {
   try {
-    const players = await withTimeout(getPlayerInsights(event.id), 15000);
+    const players = await withTimeout(
+      getPlayerInsights(event.id, { forceRefresh: true }),
+      15000,
+    );
     let contextOk = false;
     if (players) {
       await withTimeout(buildMatchContext(event, players), 20000);

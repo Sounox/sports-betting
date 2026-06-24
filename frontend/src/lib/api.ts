@@ -224,6 +224,10 @@ export interface PlayerInsights {
   data_freshness: Record<string, string | undefined>;
   players: PlayerProjection[];
   warnings: string[];
+  storage?: {
+    source: "cache" | "fresh";
+    captured_at?: string;
+  };
 }
 
 export interface MatchContext {
@@ -361,6 +365,7 @@ export interface HistoryStatus {
   prediction_snapshots?: number;
   odds_price_snapshots?: number;
   value_bet_snapshots?: number;
+  player_projection_snapshots?: number;
   backtest_results?: number;
   settlement_runs?: number;
   automation_runs?: number;

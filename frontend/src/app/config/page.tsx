@@ -210,11 +210,12 @@ export default function ConfigPage() {
         </div>
 
         {historyStatus?.enabled ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
             <MiniStat label="Matchs stockes" value={historyStatus.events_total || 0} />
             <MiniStat label="Predictions" value={historyStatus.prediction_snapshots || 0} />
             <MiniStat label="Lignes cotes" value={historyStatus.odds_price_snapshots || 0} />
             <MiniStat label="Value bets" value={historyStatus.value_bet_snapshots || 0} />
+            <MiniStat label="Snapshots joueurs" value={historyStatus.player_projection_snapshots || 0} />
           </div>
         ) : (
           <div className="mt-4 rounded-xl border border-yellow-900/50 bg-yellow-950/20 p-3 text-sm text-yellow-300">

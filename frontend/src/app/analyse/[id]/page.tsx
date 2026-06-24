@@ -762,6 +762,14 @@ function PlayerInsightsPanel({ insights }: { insights: PlayerInsights }) {
           Projections joueurs
         </h3>
         <p className="text-xs text-gray-500 mt-1">{insights.methodology}</p>
+        {insights.storage && (
+          <p className="text-[11px] text-gray-600 mt-1">
+            Source donnees: {insights.storage.source === "cache" ? "cache D1 persistant" : "recalcul frais"}
+            {insights.storage.captured_at
+              ? ` - ${new Date(insights.storage.captured_at).toLocaleString("fr-FR")}`
+              : ""}
+          </p>
+        )}
       </div>
 
       <div className="overflow-x-auto">

@@ -4,12 +4,17 @@ import { getPlayerInsights } from "@/lib/server/player-cloud";
 export const runtime = "nodejs";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ eventId: string }> },
 ) {
   try {
     const { eventId } = await context.params;
-    const insights = await getPlayerInsights(Number(eventId));
+    const refresh =
+      request.nextUrl.searchParams.get("refresh") === "1" ||
+      request.nextUrl.searchParams.get("refresh") === "true";
+    const insights = await getPlayerInsights(Number(eventId), {
+      forceRefresh: refresh,
+    });
     if (!insights) {
       return NextResponse.json(
         { detail: "Données joueurs indisponibles." },
