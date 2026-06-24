@@ -20,7 +20,7 @@ ${valueBets
   .slice(0, 8)
   .map(
     (bet) =>
-      `${bet.match}: ${bet.label} @ ${bet.odds}, edge ${(bet.edge * 100).toFixed(1)}%`,
+      `${bet.match}: ${bet.label}, cote ${bet.odds}, edge ${(bet.edge * 100).toFixed(1)}%`,
   )
   .join("\n")}`;
     const reply = await answerWithAi(

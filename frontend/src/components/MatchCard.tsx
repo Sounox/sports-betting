@@ -130,7 +130,7 @@ export function MatchCard({ event }: Props) {
             <div className="flex items-center gap-2">
               <Target size={11} className="text-green-400" />
               <span className="text-green-300 font-semibold">{topVB.label}</span>
-              <span className="text-gray-400">@ <span className="text-white font-bold">{topVB.odds}</span></span>
+              <span className="text-gray-400">cote <span className="text-white font-bold">{topVB.odds}</span></span>
               <span className="text-gray-500">{topVB.bookmaker}</span>
             </div>
             <div className="flex items-center gap-2 text-gray-400">

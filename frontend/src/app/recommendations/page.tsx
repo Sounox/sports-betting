@@ -16,6 +16,8 @@ import { clsx } from "clsx";
 import { DataFreshnessCard } from "@/components/DataFreshnessCard";
 import {
   api,
+  type MarketRadarResponse,
+  type MarketRadarSuggestion,
   type RecommendationParlay,
   type RecommendationResponse,
   type RecommendationSingle,
@@ -43,8 +45,21 @@ export default function RecommendationsPage() {
     useState<"prudent" | "balanced" | "aggressive">("balanced");
   const [maxLegs, setMaxLegs] = useState(4);
   const [data, setData] = useState<RecommendationResponse | null>(null);
+  const [radar, setRadar] = useState<MarketRadarResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [radarLoading, setRadarLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const loadRadar = async () => {
+    setRadarLoading(true);
+    try {
+      setRadar(await api.getMarketRadar({ hours: 168, limit: 4, include_proxy: true }));
+    } catch {
+      setRadar(null);
+    } finally {
+      setRadarLoading(false);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -60,6 +75,7 @@ export default function RecommendationsPage() {
           hours: 168,
         }),
       );
+      void loadRadar();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Generation impossible.");
     } finally {
@@ -135,6 +151,8 @@ export default function RecommendationsPage() {
       {data && (
         <>
           <SummaryGrid data={data} />
+
+          <MarketRadarPanel radar={radar} loading={radarLoading} />
 
           <section className="grid grid-cols-1 xl:grid-cols-[1.25fr_0.75fr] gap-5">
             <div className="space-y-4">
@@ -247,6 +265,162 @@ function SummaryGrid({ data }: { data: RecommendationResponse }) {
       <Metric label="Combine" value={data.summary.parlay_available ? "Oui" : "Non"} />
       <Metric label="Risque" value={data.filters.risk_level} />
     </div>
+  );
+}
+
+function MarketRadarPanel({
+  radar,
+  loading,
+}: {
+  radar: MarketRadarResponse | null;
+  loading: boolean;
+}) {
+  const grouped = (radar?.suggestions || []).reduce<Record<string, MarketRadarSuggestion[]>>(
+    (acc, suggestion) => {
+      acc[suggestion.category] = acc[suggestion.category] || [];
+      acc[suggestion.category].push(suggestion);
+      return acc;
+    },
+    {},
+  );
+  const order = [
+    "Joueurs",
+    "Joueurs - tirs",
+    "Buts equipe",
+    "Scenario",
+    "Defense",
+    "Buts",
+    "Corners",
+    "Cartons",
+    "Mi-temps",
+    "Handicap",
+  ];
+
+  return (
+    <div className="card space-y-4 border-emerald-900/40 bg-emerald-950/10">
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+        <div>
+          <h2 className="font-semibold text-white flex items-center gap-2">
+            <Sparkles size={18} className="text-emerald-400" />
+            Radar marches joueurs/scenarios
+          </h2>
+          <p className="text-xs text-gray-500 mt-1">
+            Signaux a surveiller sur les prochains matchs: buteurs, passes, tirs cadres, buts equipe, corners/cartons.
+          </p>
+        </div>
+        <div className="text-xs text-gray-500 md:text-right">
+          {loading
+            ? "Chargement du radar..."
+            : radar
+              ? `${radar.events_scanned} matchs scannes - ${radar.suggestions.length} signaux`
+              : "Radar indisponible"}
+        </div>
+      </div>
+
+      {loading && (
+        <div className="rounded-xl bg-gray-900/80 border border-gray-800 p-4 text-sm text-gray-400 flex items-center gap-2">
+          <Loader2 size={16} className="animate-spin" />
+          Analyse des marches joueurs et scenarios...
+        </div>
+      )}
+
+      {!loading && radar && radar.suggestions.length === 0 && (
+        <EmptyState text="Aucun signal joueur/scenario exploitable sur les prochains matchs." />
+      )}
+
+      {!loading && radar && radar.suggestions.length > 0 && (
+        <div className="space-y-5">
+          {order
+            .filter((category) => grouped[category]?.length)
+            .map((category) => (
+              <div key={category}>
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-xs font-bold uppercase tracking-wide text-emerald-300">
+                    {category}
+                  </div>
+                  <div className="text-[11px] text-gray-600">
+                    {grouped[category].length} signal(aux)
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {grouped[category].slice(0, 6).map((suggestion) => (
+                    <RadarCard key={`${suggestion.event_id}-${suggestion.category}-${suggestion.label}`} suggestion={suggestion} />
+                  ))}
+                </div>
+              </div>
+            ))}
+
+          <div className="rounded-xl border border-yellow-900/60 bg-yellow-950/20 p-3 space-y-1">
+            {radar.warnings.map((warning, index) => (
+              <div key={index} className="text-xs text-yellow-200/75 flex gap-2">
+                <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                {warning}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RadarCard({ suggestion }: { suggestion: MarketRadarSuggestion }) {
+  const playable = suggestion.data_level === "bookmaker" && suggestion.offered_odds;
+  return (
+    <Link
+      href={`/analyse/${suggestion.event_id}`}
+      className="rounded-xl border border-gray-800 bg-gray-900/80 p-3 hover:border-emerald-700/70 transition-colors"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-white text-sm leading-snug">{suggestion.label}</div>
+          <div className="text-xs text-gray-500 mt-1 truncate">{suggestion.match}</div>
+        </div>
+        <span className="rounded-full bg-emerald-900/40 text-emerald-300 px-2 py-1 text-[11px] font-bold">
+          {suggestion.score.toFixed(0)}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 mt-3">
+        <Mini label="Modele" value={pct(suggestion.probability)} />
+        <Mini
+          label={playable ? suggestion.bookmaker || "Book" : "Cote fair"}
+          value={(playable ? suggestion.offered_odds : suggestion.fair_odds)?.toFixed(2) || "n/a"}
+          good={Boolean(playable)}
+        />
+        <Mini
+          label="Edge"
+          value={suggestion.edge == null ? "n/a" : `${suggestion.edge > 0 ? "+" : ""}${pct(suggestion.edge)}`}
+          good={(suggestion.edge || 0) > 0}
+        />
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <DataLevelBadge level={suggestion.data_level} />
+        <span className="text-[10px] text-gray-600">Risque {suggestion.risk_level}</span>
+        <span className="text-[10px] text-gray-600">Conf. {suggestion.confidence}</span>
+      </div>
+
+      <p className="text-xs text-gray-500 mt-3 line-clamp-2">{suggestion.rationale}</p>
+      <p className="text-[11px] text-yellow-500/80 mt-2 line-clamp-2">{suggestion.data_note}</p>
+    </Link>
+  );
+}
+
+function DataLevelBadge({ level }: { level: MarketRadarSuggestion["data_level"] }) {
+  return (
+    <span
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+        level === "bookmaker"
+          ? "bg-green-900/40 text-green-300"
+          : level === "proxy"
+            ? "bg-red-900/40 text-red-300"
+            : "bg-blue-900/40 text-blue-300",
+      )}
+    >
+      {level === "bookmaker" ? "cote bookmaker" : level === "proxy" ? "proxy" : "modele"}
+    </span>
   );
 }
 

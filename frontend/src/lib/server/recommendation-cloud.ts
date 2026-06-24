@@ -1,4 +1,5 @@
-import type { Event, ValueBet } from "@/lib/api";
+import type { BetSuggestion, Event, ValueBet } from "@/lib/api";
+import { getMatchBetBuilder } from "@/lib/server/bet-builder-cloud";
 import { getUpcomingMatches } from "@/lib/server/football-cloud";
 
 type RiskLevel = "prudent" | "balanced" | "aggressive";
@@ -12,6 +13,12 @@ interface RecommendationInput {
   max_legs?: number;
   min_odds?: number;
   max_odds?: number;
+}
+
+interface MarketRadarInput {
+  hours?: number;
+  limit?: number;
+  include_proxy?: boolean;
 }
 
 interface CandidateBet extends ValueBet {
@@ -52,6 +59,12 @@ function qualityWeight(quality?: string) {
   if (quality === "good") return 1.1;
   if (quality === "fair") return 0.95;
   return 0.65;
+}
+
+function sourceWeight(suggestion: BetSuggestion) {
+  if (suggestion.data_level === "bookmaker") return 1.18;
+  if (suggestion.data_level === "model") return 0.96;
+  return 0.74;
 }
 
 function riskConfig(risk: RiskLevel) {
@@ -260,6 +273,110 @@ function avoidReason(event: Event) {
   if (event.prediction.data_quality === "poor") return "Qualite de donnees insuffisante.";
   if (!event.prediction.value_bets?.length) return "Aucun edge positif bookmaker detecte.";
   return "Aucune selection ne respecte les garde-fous de risque.";
+}
+
+function radarScore(suggestion: BetSuggestion) {
+  const edgeBoost = suggestion.edge ? Math.max(-8, suggestion.edge * 260) : 0;
+  const confidenceBoost =
+    suggestion.confidence === "high" ? 10 : suggestion.confidence === "medium" ? 4 : -8;
+  const riskPenalty =
+    suggestion.risk_level === "aggressive" ? 9 : suggestion.risk_level === "balanced" ? 2 : 0;
+  const score =
+    (suggestion.probability * 92 + edgeBoost + confidenceBoost - riskPenalty) *
+    sourceWeight(suggestion);
+  return Number(clamp(score, 0, 100).toFixed(1));
+}
+
+function isRadarCandidate(suggestion: BetSuggestion, includeProxy: boolean) {
+  if (suggestion.category === "Resultat") return false;
+  if (suggestion.category === "Score exact") return false;
+  if (suggestion.tags.includes("exact_score")) return false;
+  if (suggestion.tags.includes("high_variance") && suggestion.probability < 0.12) {
+    return false;
+  }
+  if (!includeProxy && suggestion.data_level === "proxy") return false;
+  if (suggestion.probability < 0.08) return false;
+  return true;
+}
+
+function radarReason(suggestion: BetSuggestion) {
+  if (suggestion.data_level === "bookmaker") {
+    return "Cote bookmaker disponible: peut etre comparee au modele.";
+  }
+  if (suggestion.data_level === "proxy") {
+    return "Signal proxy experimental: utile pour surveiller le marche, pas pour forcer un pari.";
+  }
+  return "Signal modele sans cote bookmaker confirmee: a verifier avant de jouer.";
+}
+
+export async function getMarketRadar(input: MarketRadarInput = {}) {
+  const hours = clamp(Number(input.hours || 168), 1, 24 * 30);
+  const limit = clamp(Number(input.limit || 4), 1, 8);
+  const includeProxy = input.include_proxy !== false;
+  const events = (await getUpcomingMatches(hours)).slice(0, limit);
+  const settledBuilders = await Promise.allSettled(
+    events.map((event) => getMatchBetBuilder(event.id)),
+  );
+
+  const suggestions = settledBuilders.flatMap((result, index) => {
+    if (result.status !== "fulfilled" || !result.value) return [];
+    const event = events[index];
+    return result.value.suggestions
+      .filter((suggestion) => isRadarCandidate(suggestion, includeProxy))
+      .map((suggestion) => ({
+        event_id: event.id,
+        match: `${event.home_team} vs ${event.away_team}`,
+        competition: event.competition,
+        scheduled_at: event.scheduled_at,
+        category: suggestion.category,
+        market: suggestion.market,
+        label: suggestion.label,
+        probability: suggestion.probability,
+        fair_odds: suggestion.fair_odds,
+        offered_odds: suggestion.offered_odds,
+        bookmaker: suggestion.bookmaker,
+        edge: suggestion.edge,
+        risk_level: suggestion.risk_level,
+        confidence: suggestion.confidence,
+        data_level: suggestion.data_level || (suggestion.offered_odds ? "bookmaker" : "model"),
+        source: suggestion.source,
+        score: radarScore(suggestion),
+        rationale: suggestion.rationale,
+        data_note: suggestion.data_note || radarReason(suggestion),
+      }));
+  });
+
+  const categoryPriority = new Map([
+    ["Joueurs", 1],
+    ["Joueurs - tirs", 2],
+    ["Buts equipe", 3],
+    ["Scenario", 4],
+    ["Defense", 5],
+    ["Buts", 6],
+    ["Corners", 7],
+    ["Cartons", 8],
+    ["Mi-temps", 9],
+    ["Handicap", 10],
+  ]);
+
+  suggestions.sort((a, b) => {
+    const categoryDelta =
+      (categoryPriority.get(a.category) || 50) -
+      (categoryPriority.get(b.category) || 50);
+    if (categoryDelta !== 0) return categoryDelta;
+    return b.score - a.score;
+  });
+
+  return {
+    generated_at: new Date().toISOString(),
+    events_scanned: events.length,
+    suggestions: suggestions.slice(0, 36),
+    warnings: [
+      "Le radar inclut des marches modele/proxy: ils ne sont pas tous jouables chez un bookmaker.",
+      "Les props joueurs dependent fortement des compositions et minutes probables.",
+      "Les corners, cartons et tirs cadres sont experimentaux tant que les donnees observees ne sont pas branchees.",
+    ],
+  };
 }
 
 export async function getDailyRecommendations(input: RecommendationInput = {}) {

@@ -39,6 +39,10 @@ export const api = {
     const q = new URLSearchParams(params as any).toString();
     return apiFetch<RecommendationResponse>(`/api/v1/recommendations?${q}`);
   },
+  getMarketRadar: (params?: MarketRadarRequest) => {
+    const q = new URLSearchParams(params as any).toString();
+    return apiFetch<MarketRadarResponse>(`/api/v1/recommendations/market-radar?${q}`);
+  },
 
   // Parlays
   generateParlay: (data: ParlayRequest) =>
@@ -364,6 +368,41 @@ export interface RecommendationResponse {
     confidence: string;
   }>;
   guardrails: string[];
+}
+
+export interface MarketRadarRequest {
+  hours?: number;
+  limit?: number;
+  include_proxy?: boolean;
+}
+
+export interface MarketRadarSuggestion {
+  event_id: number;
+  match: string;
+  competition: string;
+  scheduled_at: string;
+  category: string;
+  market: string;
+  label: string;
+  probability: number;
+  fair_odds: number;
+  offered_odds?: number;
+  bookmaker?: string;
+  edge?: number;
+  risk_level: string;
+  confidence: string;
+  data_level: "bookmaker" | "model" | "proxy";
+  source: "bookmaker" | "model";
+  score: number;
+  rationale: string;
+  data_note: string;
+}
+
+export interface MarketRadarResponse {
+  generated_at: string;
+  events_scanned: number;
+  suggestions: MarketRadarSuggestion[];
+  warnings: string[];
 }
 
 export interface BankrollData {
