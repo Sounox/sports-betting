@@ -10,6 +10,9 @@ import type {
 import { getMatch } from "@/lib/server/football-cloud";
 import { getPlayerInsights } from "@/lib/server/player-cloud";
 import {
+  EVENT_CORE_SOCCER_MARKETS,
+  EVENT_PLAYER_SOCCER_MARKETS,
+  getWorldCupEventOdds,
   getWorldCupOdds,
   matchOddsEvent,
   serializeOdds,
@@ -91,6 +94,18 @@ function normalize(value: string) {
     .replace(/[^a-z0-9]/g, "");
 }
 
+function sameEntity(a?: string, b?: string) {
+  if (!a || !b) return false;
+  const left = normalize(a);
+  const right = normalize(b);
+  if (!left || !right) return false;
+  return (
+    left === right ||
+    (left.length >= 7 && right.includes(left)) ||
+    (right.length >= 7 && left.includes(right))
+  );
+}
+
 function bestOutcome(
   snapshots: OddsSnapshot[],
   market: string,
@@ -111,6 +126,151 @@ function bestOutcome(
   }
 
   return best;
+}
+
+function bestPlayerOutcome(
+  snapshots: OddsSnapshot[],
+  market: string,
+  playerName: string,
+  predicate: (selection: OddsSnapshot["selections"][number]) => boolean = (selection) =>
+    selection.name === "Yes",
+) {
+  return bestOutcome(
+    snapshots,
+    market,
+    (selection) =>
+      predicate(selection) &&
+      sameEntity(selection.description || selection.name, playerName),
+  );
+}
+
+function cardProbability(position: string, reliability: BetSuggestion["confidence"]) {
+  const normalized = position.toLowerCase();
+  const base = normalized.includes("defence")
+    ? 0.22
+    : normalized.includes("midfield")
+      ? 0.17
+      : normalized.includes("forward") || normalized.includes("offence")
+        ? 0.1
+        : 0.08;
+  return reliability === "high" ? base * 1.05 : reliability === "medium" ? base : base * 0.85;
+}
+
+function bookmakerOnlyProbability(selection: OddsSnapshot["selections"][number]) {
+  if (selection.description && selection.price > 1) {
+    return Math.min(0.95, (1 / selection.price) * 0.92);
+  }
+  if (selection.fair_prob > 0) return selection.fair_prob;
+  return selection.price > 1 ? Math.min(0.95, (1 / selection.price) * 0.92) : 0.05;
+}
+
+function appendBookmakerOnlyPlayerProps(
+  suggestions: BetSuggestion[],
+  snapshots: OddsSnapshot[],
+) {
+  const seen = new Set(suggestions.flatMap((suggestion) => suggestion.tags));
+  const best = new Map<
+    string,
+    {
+      snapshot: OddsSnapshot;
+      selection: OddsSnapshot["selections"][number];
+      category: string;
+      market: string;
+      label: string;
+      tag: string;
+    }
+  >();
+
+  for (const snapshot of snapshots) {
+    if (
+      ![
+        "player_goal_scorer_anytime",
+        "player_assists",
+        "player_shots_on_target",
+        "player_to_receive_card",
+      ].includes(snapshot.market)
+    ) {
+      continue;
+    }
+
+    for (const selection of snapshot.selections) {
+      const player = selection.description;
+      if (!player || selection.price <= 1) continue;
+      if (
+        ["player_goal_scorer_anytime", "player_assists", "player_to_receive_card"].includes(snapshot.market) &&
+        selection.name !== "Yes"
+      ) {
+        continue;
+      }
+      if (
+        snapshot.market === "player_shots_on_target" &&
+        selection.name !== "Over"
+      ) {
+        continue;
+      }
+
+      const normalizedPlayer = normalize(player);
+      const line = selection.point == null ? "" : `_${String(selection.point).replace(".", "_")}`;
+      const key = `${snapshot.market}:${normalizedPlayer}:${selection.name}:${line}`;
+      if (seen.has(`book_player_${key}`)) continue;
+
+      let category = "Joueurs";
+      let market = "Buteur";
+      let label = `${player} buteur`;
+      if (snapshot.market === "player_assists") {
+        market = "Passe decisive";
+        label = `${player} passe decisive`;
+      }
+      if (snapshot.market === "player_shots_on_target") {
+        category = "Joueurs - tirs";
+        market = "Tir cadre";
+        label =
+          selection.point && selection.point > 0.5
+            ? `${player} ${selection.point + 0.5}+ tirs cadres`
+            : `${player} 1+ tir cadre`;
+      }
+      if (snapshot.market === "player_to_receive_card") {
+        category = "Joueurs - discipline";
+        market = "Carton joueur";
+        label = `${player} recoit un carton`;
+      }
+
+      const current = best.get(key);
+      if (!current || selection.price > current.selection.price) {
+        best.set(key, {
+          snapshot,
+          selection,
+          category,
+          market,
+          label,
+          tag: `book_player_${key}`,
+        });
+      }
+    }
+  }
+
+  for (const item of best.values()) {
+    suggestions.push(
+      makeSuggestion({
+        id: item.tag,
+        category: item.category,
+        market: item.market,
+        selection: item.selection.description || item.selection.name,
+        label: item.label,
+        probability: bookmakerOnlyProbability(item.selection),
+        source: "bookmaker",
+        odds: { price: item.selection.price, bookmaker: item.snapshot.bookmaker },
+        confidence: "low",
+        rationale:
+          "Cote bookmaker reelle detectee; estimation independante limitee faute de donnees joueur fiables.",
+        data_level: "bookmaker",
+        data_note:
+          "A traiter comme marche a surveiller: l'edge n'est pas validee par un modele joueur robuste.",
+        conflict_key: item.tag,
+        tags: [item.tag, "bookmaker_player_prop", "high_variance"],
+      }),
+    );
+  }
 }
 
 function makeSuggestion(input: {
@@ -280,6 +440,16 @@ function buildSuggestions(
   );
 
   const noDraw = pred.prob_home + pred.prob_away;
+  const dnbHome = bestOutcome(
+    snapshots,
+    "draw_no_bet",
+    (selection) => sameEntity(selection.name, event.home_team),
+  );
+  const dnbAway = bestOutcome(
+    snapshots,
+    "draw_no_bet",
+    (selection) => sameEntity(selection.name, event.away_team),
+  );
   if (noDraw > 0) {
     suggestions.push(
       makeSuggestion({
@@ -289,7 +459,8 @@ function buildSuggestions(
         selection: event.home_team,
         label: `${event.home_team} rembourse si nul`,
         probability: pred.prob_home / noDraw,
-        source: "model",
+        source: dnbHome ? "bookmaker" : "model",
+        odds: dnbHome ? { price: dnbHome.price, bookmaker: dnbHome.bookmaker } : undefined,
         confidence: pred.confidence,
         rationale: "Probabilite conditionnelle hors match nul.",
         conflict_key: "draw_no_bet",
@@ -302,7 +473,8 @@ function buildSuggestions(
         selection: event.away_team,
         label: `${event.away_team} rembourse si nul`,
         probability: pred.prob_away / noDraw,
-        source: "model",
+        source: dnbAway ? "bookmaker" : "model",
+        odds: dnbAway ? { price: dnbAway.price, bookmaker: dnbAway.bookmaker } : undefined,
         confidence: pred.confidence,
         rationale: "Probabilite conditionnelle hors match nul.",
         conflict_key: "draw_no_bet",
@@ -356,6 +528,16 @@ function buildSuggestions(
   }
 
   const bttsYes = pred.markets?.btts?.yes ?? 0;
+  const bttsYesBook = bestOutcome(
+    snapshots,
+    "btts",
+    (selection) => selection.name === "Yes",
+  );
+  const bttsNoBook = bestOutcome(
+    snapshots,
+    "btts",
+    (selection) => selection.name === "No",
+  );
   suggestions.push(
     makeSuggestion({
       id: "btts_yes",
@@ -364,7 +546,8 @@ function buildSuggestions(
       selection: "Oui",
       label: "Les deux equipes marquent",
       probability: bttsYes,
-      source: "model",
+      source: bttsYesBook ? "bookmaker" : "model",
+      odds: bttsYesBook ? { price: bttsYesBook.price, bookmaker: bttsYesBook.bookmaker } : undefined,
       confidence: "medium",
       rationale: `Probabilite BTTS Oui ${pct(bttsYes)}.`,
       conflict_key: "btts",
@@ -377,7 +560,8 @@ function buildSuggestions(
       selection: "Non",
       label: "Au moins une equipe ne marque pas",
       probability: 1 - bttsYes,
-      source: "model",
+      source: bttsNoBook ? "bookmaker" : "model",
+      odds: bttsNoBook ? { price: bttsNoBook.price, bookmaker: bttsNoBook.bookmaker } : undefined,
       confidence: "medium",
       rationale: `Probabilite BTTS Non ${pct(1 - bttsYes)}.`,
       conflict_key: "btts",
@@ -564,6 +748,22 @@ function buildSuggestions(
   ] as const) {
     for (const line of [0.5, 1.5, 2.5]) {
       const over = poissonOver(lambda, line);
+      const teamOverBook = bestOutcome(
+        snapshots,
+        "team_totals",
+        (selection) =>
+          selection.name === "Over" &&
+          selection.point === line &&
+          sameEntity(selection.description, team),
+      );
+      const teamUnderBook = bestOutcome(
+        snapshots,
+        "team_totals",
+        (selection) =>
+          selection.name === "Under" &&
+          selection.point === line &&
+          sameEntity(selection.description, team),
+      );
       suggestions.push(
         makeSuggestion({
           id: `${side}_team_over_${String(line).replace(".", "_")}`,
@@ -572,7 +772,8 @@ function buildSuggestions(
           selection: `${team} plus de ${line}`,
           label: `${team} marque plus de ${line} but(s)`,
           probability: over,
-          source: "model",
+          source: teamOverBook ? "bookmaker" : "model",
+          odds: teamOverBook ? { price: teamOverBook.price, bookmaker: teamOverBook.bookmaker } : undefined,
           confidence: "medium",
           rationale: `${team}: ${lambda.toFixed(2)} but(s) attendu(s).`,
           conflict_key: `${side}_team_total_${line}`,
@@ -585,7 +786,8 @@ function buildSuggestions(
           selection: `${team} moins de ${line}`,
           label: `${team} marque moins de ${line} but(s)`,
           probability: 1 - over,
-          source: "model",
+          source: teamUnderBook ? "bookmaker" : "model",
+          odds: teamUnderBook ? { price: teamUnderBook.price, bookmaker: teamUnderBook.bookmaker } : undefined,
           confidence: "medium",
           rationale: `${team}: ${lambda.toFixed(2)} but(s) attendu(s).`,
           conflict_key: `${side}_team_total_${line}`,
@@ -810,6 +1012,36 @@ function buildSuggestions(
       (player.position.toLowerCase().includes("midfield") ? 2.1 : 2.7);
     const shotOnTargetProbability = poissonAtLeastOne(shotOnTargetLambda);
     const twoShotsOnTargetProbability = poissonAtLeastTwo(shotOnTargetLambda);
+    const scorerBook = bestPlayerOutcome(
+      snapshots,
+      "player_goal_scorer_anytime",
+      player.player,
+    );
+    const assistBook = bestPlayerOutcome(
+      snapshots,
+      "player_assists",
+      player.player,
+      (selection) =>
+        selection.name === "Yes" ||
+        (selection.name === "Over" && (selection.point == null || selection.point <= 0.5)),
+    );
+    const shotOnTargetBook = bestPlayerOutcome(
+      snapshots,
+      "player_shots_on_target",
+      player.player,
+      (selection) => selection.name === "Over" && (selection.point == null || selection.point <= 0.5),
+    );
+    const twoShotsOnTargetBook = bestPlayerOutcome(
+      snapshots,
+      "player_shots_on_target",
+      player.player,
+      (selection) => selection.name === "Over" && selection.point === 1.5,
+    );
+    const cardBook = bestPlayerOutcome(
+      snapshots,
+      "player_to_receive_card",
+      player.player,
+    );
 
     suggestions.push(
       makeSuggestion({
@@ -819,7 +1051,8 @@ function buildSuggestions(
         selection: player.player,
         label: `${player.player} buteur`,
         probability: player.anytime_scorer_probability,
-        source: "model",
+        source: scorerBook ? "bookmaker" : "model",
+        odds: scorerBook ? { price: scorerBook.price, bookmaker: scorerBook.bookmaker } : undefined,
         confidence: player.reliability,
         rationale: `${player.expected_goals.toFixed(2)} but attendu individuel.`,
         conflict_key: `player_${player.player_id}_goal`,
@@ -845,7 +1078,8 @@ function buildSuggestions(
         selection: player.player,
         label: `${player.player} passe decisive`,
         probability: player.assist_probability,
-        source: "model",
+        source: assistBook ? "bookmaker" : "model",
+        odds: assistBook ? { price: assistBook.price, bookmaker: assistBook.bookmaker } : undefined,
         confidence: player.reliability,
         rationale: "Projection derivee du poste et des passes tournoi.",
         conflict_key: `player_${player.player_id}_assist`,
@@ -871,12 +1105,15 @@ function buildSuggestions(
         selection: player.player,
         label: `${player.player} 1+ tir cadre`,
         probability: shotOnTargetProbability,
-        source: "model",
+        source: shotOnTargetBook ? "bookmaker" : "model",
+        odds: shotOnTargetBook ? { price: shotOnTargetBook.price, bookmaker: shotOnTargetBook.bookmaker } : undefined,
         confidence: "low",
         rationale: "Proxy derive des xG individuels: pas encore une statistique de tirs observee.",
-        data_level: "proxy",
+        data_level: shotOnTargetBook ? "bookmaker" : "proxy",
         data_note:
-          "A confirmer avec les cotes de tirs cadres du bookmaker avant de jouer.",
+          shotOnTargetBook
+            ? "Cote bookmaker disponible, mais la probabilite modele reste un proxy derive des xG."
+            : "A confirmer avec les cotes de tirs cadres du bookmaker avant de jouer.",
         conflict_key: `player_${player.player_id}_sot`,
         tags: ["proxy_model", "player_shot", `player_${player.player_id}`],
       }),
@@ -887,12 +1124,15 @@ function buildSuggestions(
         selection: player.player,
         label: `${player.player} 2+ tirs cadres`,
         probability: twoShotsOnTargetProbability,
-        source: "model",
+        source: twoShotsOnTargetBook ? "bookmaker" : "model",
+        odds: twoShotsOnTargetBook ? { price: twoShotsOnTargetBook.price, bookmaker: twoShotsOnTargetBook.bookmaker } : undefined,
         confidence: "low",
         rationale: "Proxy tres volatil derive des xG individuels.",
-        data_level: "proxy",
+        data_level: twoShotsOnTargetBook ? "bookmaker" : "proxy",
         data_note:
-          "Marche experimental: exclu des combines prudents.",
+          twoShotsOnTargetBook
+            ? "Cote bookmaker disponible, mais marche tres sensible au temps de jeu."
+            : "Marche experimental: exclu des combines prudents.",
         conflict_key: `player_${player.player_id}_sot`,
         tags: ["proxy_model", "player_shot", `player_${player.player_id}`, "high_variance"],
       }),
@@ -913,7 +1153,31 @@ function buildSuggestions(
         tags: ["proxy_model", "player_goal", `player_${player.player_id}`, "high_variance"],
       }),
     );
+
+    if (cardBook) {
+      suggestions.push(
+        makeSuggestion({
+          id: `player_card_${player.player_id}`,
+          category: "Joueurs - discipline",
+          market: "Carton joueur",
+          selection: player.player,
+          label: `${player.player} recoit un carton`,
+          probability: cardProbability(player.position, player.reliability),
+          source: "bookmaker",
+          odds: { price: cardBook.price, bookmaker: cardBook.bookmaker },
+          confidence: "low",
+          rationale: "Proxy discipline base sur le poste; cote bookmaker reelle disponible.",
+          data_level: "bookmaker",
+          data_note:
+            "A confirmer avec composition, role defensif et arbitre avant de jouer.",
+          conflict_key: `player_${player.player_id}_card`,
+          tags: ["player_card", `player_${player.player_id}`, "high_variance"],
+        }),
+      );
+    }
   }
+
+  appendBookmakerOnlyPlayerProps(suggestions, snapshots);
 
   return suggestions
     .filter((suggestion) => suggestion.probability > 0.015)
@@ -1042,6 +1306,7 @@ function buildSameMatchParlay(
 
 export async function getMatchBetBuilder(
   eventId: number,
+  options: { includeEventOdds?: boolean } = {},
 ): Promise<MatchBetBuilder | null> {
   const [event, players, odds] = await Promise.all([
     getMatch(eventId),
@@ -1051,7 +1316,21 @@ export async function getMatchBetBuilder(
   if (!event?.prediction) return null;
 
   const oddsEvent = odds ? matchOddsEvent(event, odds.events) : undefined;
-  const snapshots = serializeOdds(oddsEvent);
+  const additionalOdds =
+    options.includeEventOdds !== false && oddsEvent?.id
+      ? await Promise.allSettled([
+          getWorldCupEventOdds(oddsEvent.id, EVENT_CORE_SOCCER_MARKETS),
+          getWorldCupEventOdds(oddsEvent.id, EVENT_PLAYER_SOCCER_MARKETS),
+        ]).then((results) =>
+          results
+            .filter((result) => result.status === "fulfilled")
+            .map((result) => result.value.event),
+        )
+      : [];
+  const snapshots = [
+    ...serializeOdds(oddsEvent),
+    ...additionalOdds.flatMap((eventOdds) => serializeOdds(eventOdds)),
+  ];
   const suggestions = buildSuggestions(event, players, snapshots);
 
   return {
@@ -1070,6 +1349,7 @@ export async function getMatchBetBuilder(
     ],
     warnings: [
       "Les marchés joueurs et scénarios sont des projections modèle si aucune cote bookmaker n'est disponible.",
+      "Les cotes joueurs bookmaker viennent des marchés événement disponibles et peuvent varier selon les books.",
       "Aucun pari n'est sûr: les propositions sont probabilistes.",
     ],
   };

@@ -7,6 +7,7 @@ const SPORT_KEY = "soccer_fifa_world_cup";
 
 interface OddsOutcome {
   name: string;
+  description?: string;
   price: number;
   point?: number;
 }
@@ -31,6 +32,24 @@ export interface OddsEvent {
   commence_time: string;
   bookmakers: OddsBookmaker[];
 }
+
+export const EVENT_CORE_SOCCER_MARKETS = [
+  "btts",
+  "draw_no_bet",
+  "team_totals",
+];
+
+export const EVENT_PLAYER_SOCCER_MARKETS = [
+  "player_goal_scorer_anytime",
+  "player_assists",
+  "player_shots_on_target",
+  "player_to_receive_card",
+];
+
+const ADDITIONAL_SOCCER_MARKETS = [
+  ...EVENT_CORE_SOCCER_MARKETS,
+  ...EVENT_PLAYER_SOCCER_MARKETS,
+];
 
 interface CandidateOdd {
   key: string;
@@ -261,6 +280,47 @@ export async function getWorldCupOdds(): Promise<{
   };
 }
 
+export async function getWorldCupEventOdds(
+  oddsEventId: string,
+  markets = ADDITIONAL_SOCCER_MARKETS,
+): Promise<{
+  event: OddsEvent;
+  quota: { remaining?: string; used?: string; last?: string };
+}> {
+  const marketKey = markets.join(",");
+  const safeMarketKey = markets.join("-");
+  const url = new URL(`${ODDS_API_BASE}/sports/${SPORT_KEY}/events/${oddsEventId}/odds`);
+  url.searchParams.set("apiKey", ODDS_API_KEY);
+  url.searchParams.set("regions", "eu");
+  url.searchParams.set("markets", marketKey);
+  url.searchParams.set("oddsFormat", "decimal");
+
+  const response = await fetch(url, {
+    next: { revalidate: 21600 },
+    // Event-level markets can be expensive; cache for six hours to protect the free quota.
+    ...({
+      cf: {
+        cacheEverything: true,
+        cacheTtl: 21600,
+        cacheKey: `${ODDS_API_BASE}/cache/${SPORT_KEY}/${oddsEventId}/eu/additional-${safeMarketKey}`,
+      },
+    } as Record<string, unknown>),
+  });
+
+  if (!response.ok) {
+    throw new Error(`The Odds API event odds ${response.status}`);
+  }
+
+  return {
+    event: (await response.json()) as OddsEvent,
+    quota: {
+      remaining: response.headers.get("x-requests-remaining") || undefined,
+      used: response.headers.get("x-requests-used") || undefined,
+      last: response.headers.get("x-requests-last") || undefined,
+    },
+  };
+}
+
 export function matchOddsEvent(event: Event, oddsEvents: OddsEvent[]) {
   const home = normalize(event.home_team);
   const away = normalize(event.away_team);
@@ -350,7 +410,7 @@ export function serializeOdds(
 
   for (const bookmaker of oddsEvent.bookmakers || []) {
     for (const market of bookmaker.markets || []) {
-      if (market.key.includes("lay")) continue;
+      if (market.key.endsWith("_lay") || market.key.includes("_lay_")) continue;
       const overround = market.outcomes.reduce(
         (sum, outcome) =>
           outcome.price > 1 ? sum + 1 / outcome.price : sum,
@@ -362,6 +422,7 @@ export function serializeOdds(
         selections: market.outcomes.map((outcome) => ({
           key: normalize(outcome.name),
           name: outcome.name,
+          description: outcome.description,
           price: outcome.price,
           fair_prob:
             outcome.price > 1 && overround > 0

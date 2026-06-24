@@ -286,6 +286,7 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
     "Scenario",
     "Joueurs",
     "Joueurs - tirs",
+    "Joueurs - discipline",
     "Corners",
     "Cartons",
     "Score exact",

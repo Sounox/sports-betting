@@ -152,7 +152,14 @@ export interface ValueBet {
 export interface OddsSnapshot {
   bookmaker: string;
   market: string;
-  selections: { key: string; name: string; price: number; fair_prob: number; point?: number }[];
+  selections: {
+    key: string;
+    name: string;
+    description?: string;
+    price: number;
+    fair_prob: number;
+    point?: number;
+  }[];
   overround: number;
   captured_at: string;
 }

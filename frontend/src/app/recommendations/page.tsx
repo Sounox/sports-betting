@@ -53,7 +53,7 @@ export default function RecommendationsPage() {
   const loadRadar = async () => {
     setRadarLoading(true);
     try {
-      setRadar(await api.getMarketRadar({ hours: 168, limit: 4, include_proxy: true }));
+      setRadar(await api.getMarketRadar({ hours: 168, limit: 2, include_proxy: true }));
     } catch {
       setRadar(null);
     } finally {
@@ -286,6 +286,7 @@ function MarketRadarPanel({
   const order = [
     "Joueurs",
     "Joueurs - tirs",
+    "Joueurs - discipline",
     "Buts equipe",
     "Scenario",
     "Defense",

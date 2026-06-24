@@ -315,7 +315,9 @@ export async function getMarketRadar(input: MarketRadarInput = {}) {
   const includeProxy = input.include_proxy !== false;
   const events = (await getUpcomingMatches(hours)).slice(0, limit);
   const settledBuilders = await Promise.allSettled(
-    events.map((event) => getMatchBetBuilder(event.id)),
+    events.map((event, index) =>
+      getMatchBetBuilder(event.id, { includeEventOdds: index < 2 }),
+    ),
   );
 
   const suggestions = settledBuilders.flatMap((result, index) => {
@@ -349,14 +351,15 @@ export async function getMarketRadar(input: MarketRadarInput = {}) {
   const categoryPriority = new Map([
     ["Joueurs", 1],
     ["Joueurs - tirs", 2],
-    ["Buts equipe", 3],
-    ["Scenario", 4],
-    ["Defense", 5],
-    ["Buts", 6],
-    ["Corners", 7],
-    ["Cartons", 8],
-    ["Mi-temps", 9],
-    ["Handicap", 10],
+    ["Joueurs - discipline", 3],
+    ["Buts equipe", 4],
+    ["Scenario", 5],
+    ["Defense", 6],
+    ["Buts", 7],
+    ["Corners", 8],
+    ["Cartons", 9],
+    ["Mi-temps", 10],
+    ["Handicap", 11],
   ]);
 
   suggestions.sort((a, b) => {
@@ -373,6 +376,7 @@ export async function getMarketRadar(input: MarketRadarInput = {}) {
     suggestions: suggestions.slice(0, 36),
     warnings: [
       "Le radar inclut des marches modele/proxy: ils ne sont pas tous jouables chez un bookmaker.",
+      "Les cotes joueurs reelles sont chargees seulement sur les deux premiers matchs du radar pour proteger le quota gratuit.",
       "Les props joueurs dependent fortement des compositions et minutes probables.",
       "Les corners, cartons et tirs cadres sont experimentaux tant que les donnees observees ne sont pas branchees.",
     ],
