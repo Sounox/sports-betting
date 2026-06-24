@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { api, type Event } from "@/lib/api";
 import { MatchCard } from "@/components/MatchCard";
+import { DataFreshnessCard } from "@/components/DataFreshnessCard";
 import { RefreshCw, Calendar } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -44,6 +45,8 @@ export default function HomePage() {
           Actualiser
         </button>
       </div>
+
+      <DataFreshnessCard compact onAfterRefresh={load} />
 
       {error && (
         <div className="card border-red-800 bg-red-900/20 text-red-400 text-sm">

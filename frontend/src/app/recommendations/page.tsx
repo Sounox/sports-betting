@@ -13,6 +13,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { clsx } from "clsx";
+import { DataFreshnessCard } from "@/components/DataFreshnessCard";
 import {
   api,
   type RecommendationParlay,
@@ -89,6 +90,8 @@ export default function RecommendationsPage() {
           </div>
         )}
       </div>
+
+      <DataFreshnessCard onAfterRefresh={load} />
 
       <div className="card grid grid-cols-1 md:grid-cols-5 gap-3">
         <NumberField label="Bankroll" value={bankroll} onChange={setBankroll} />
