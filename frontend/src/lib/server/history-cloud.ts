@@ -6,7 +6,11 @@ import {
   getWorldCupMatches,
 } from "@/lib/server/football-cloud";
 import {
+  EVENT_CORE_SOCCER_MARKETS,
+  EVENT_PLAYER_SOCCER_MARKETS,
+  getWorldCupEventOdds,
   getWorldCupOdds,
+  type OddsEvent,
   matchOddsEvent,
   serializeOdds,
 } from "@/lib/server/odds-cloud";
@@ -444,6 +448,13 @@ function predictionStatement(db: D1Database, event: Event, capturedAt: string) {
     );
 }
 
+function oddsSelectionLabel(selection: OddsSnapshot["selections"][number]) {
+  if (!selection.description) return selection.name;
+  return selection.name === "Yes"
+    ? selection.description
+    : `${selection.description} ${selection.name}`;
+}
+
 function oddsStatements(
   db: D1Database,
   event: Event,
@@ -467,7 +478,7 @@ function oddsStatements(
             event.scheduled_at,
             snapshot.bookmaker,
             snapshot.market,
-            selection.name,
+            oddsSelectionLabel(selection),
             selection.price,
             selection.point ?? null,
             selection.fair_prob,
@@ -516,7 +527,43 @@ function valueBetStatements(
   );
 }
 
-export async function createHistorySnapshot(hours = 168) {
+async function loadAdvancedOddsForEvents(
+  events: Event[],
+  oddsEvents: OddsEvent[],
+  limit: number,
+) {
+  const advancedByEvent = new Map<number, OddsEvent[]>();
+  if (limit <= 0) return advancedByEvent;
+
+  for (const event of events) {
+    if (advancedByEvent.size >= limit) break;
+    const oddsEvent = matchOddsEvent(event, oddsEvents);
+    if (!oddsEvent?.id) continue;
+
+    const results = await Promise.allSettled([
+      getWorldCupEventOdds(oddsEvent.id, EVENT_CORE_SOCCER_MARKETS),
+      getWorldCupEventOdds(oddsEvent.id, EVENT_PLAYER_SOCCER_MARKETS),
+    ]);
+    const fulfilled = results
+      .filter(
+        (
+          result,
+        ): result is PromiseFulfilledResult<
+          Awaited<ReturnType<typeof getWorldCupEventOdds>>
+        > => result.status === "fulfilled",
+      )
+      .map((result) => result.value.event);
+
+    if (fulfilled.length) advancedByEvent.set(event.id, fulfilled);
+  }
+
+  return advancedByEvent;
+}
+
+export async function createHistorySnapshot(
+  hours = 168,
+  options: { advancedOddsLimit?: number } = {},
+) {
   const db = getDb();
   if (!db) {
     return { ...unavailableStatus(), saved: false };
@@ -538,10 +585,16 @@ export async function createHistorySnapshot(hours = 168) {
       getUpcomingMatches(hours),
       getWorldCupOdds(),
     ]);
+    const advancedOddsByEvent = await loadAdvancedOddsForEvents(
+      upcoming,
+      odds.events,
+      Math.max(0, Math.min(options.advancedOddsLimit ?? 0, upcoming.length)),
+    );
     const capturedAt = new Date().toISOString();
     const statements: D1PreparedStatement[] = [];
     let predictionsSaved = 0;
     let oddsSaved = 0;
+    let advancedOddsRowsSaved = 0;
     let valueBetsSaved = 0;
 
     for (const event of allEvents) {
@@ -555,8 +608,16 @@ export async function createHistorySnapshot(hours = 168) {
         predictionsSaved += 1;
       }
       const oddsEvent = matchOddsEvent(event, odds.events);
-      const snapshots = serializeOdds(oddsEvent);
+      const advancedSnapshots = (advancedOddsByEvent.get(event.id) || [])
+        .flatMap((eventOdds) => serializeOdds(eventOdds));
+      const snapshots = [...serializeOdds(oddsEvent), ...advancedSnapshots];
       const oddsRows = oddsStatements(db, event, snapshots, capturedAt);
+      if (advancedSnapshots.length) {
+        advancedOddsRowsSaved += advancedSnapshots.reduce(
+          (sum, snapshot) => sum + snapshot.selections.length,
+          0,
+        );
+      }
       statements.push(...oddsRows);
       oddsSaved += oddsRows.length;
       const valueBets = event.prediction?.value_bets || [];
@@ -599,6 +660,8 @@ export async function createHistorySnapshot(hours = 168) {
       upcoming_seen: upcoming.length,
       predictions_saved: predictionsSaved,
       odds_saved: oddsSaved,
+      advanced_odds_events: advancedOddsByEvent.size,
+      advanced_odds_rows_saved: advancedOddsRowsSaved,
       value_bets_saved: valueBetsSaved,
     };
   } catch (error) {
@@ -1190,6 +1253,7 @@ export async function runAutomatedDataRefresh(options: {
   trigger?: "manual" | "cron";
   hours?: number;
   warmLimit?: number;
+  advancedOddsLimit?: number;
 } = {}) {
   const db = getDb();
   if (!db) {
@@ -1202,6 +1266,8 @@ export async function runAutomatedDataRefresh(options: {
   const hours = Math.max(1, Math.min(options.hours || 168, 24 * 30));
   const warmLimit =
     options.warmLimit ?? (mode === "full" ? 4 : mode === "fast" ? 0 : 2);
+  const advancedOddsLimit =
+    options.advancedOddsLimit ?? (mode === "full" ? 2 : 0);
   const startedAt = new Date().toISOString();
   const run = await db
     .prepare(
@@ -1212,7 +1278,9 @@ export async function runAutomatedDataRefresh(options: {
   const runId = run?.id;
 
   try {
-    const snapshot = await createHistorySnapshot(hours);
+    const snapshot = await createHistorySnapshot(hours, {
+      advancedOddsLimit,
+    });
     const settlement = await settleBacktestingResults();
     let playersWarmed = 0;
     let contextsWarmed = 0;
@@ -1271,6 +1339,8 @@ export async function runAutomatedDataRefresh(options: {
       upcoming_seen: snapshot.upcoming_seen ?? 0,
       predictions_saved: snapshot.predictions_saved ?? 0,
       odds_saved: snapshot.odds_saved ?? 0,
+      advanced_odds_events: snapshot.advanced_odds_events ?? 0,
+      advanced_odds_rows_saved: snapshot.advanced_odds_rows_saved ?? 0,
       value_bets_saved: snapshot.value_bets_saved ?? 0,
       events_settled: settlement.events_settled ?? 0,
       prediction_markets_settled:

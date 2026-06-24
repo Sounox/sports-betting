@@ -9,6 +9,8 @@ export async function POST(request: NextRequest) {
     const triggerParam = request.nextUrl.searchParams.get("trigger");
     const warmLimitParam = request.nextUrl.searchParams.get("warm_limit");
     const hoursParam = request.nextUrl.searchParams.get("hours");
+    const advancedOddsLimitParam =
+      request.nextUrl.searchParams.get("advanced_limit");
     const mode = modeParam === "fast" ? "fast" : "full";
     const trigger = triggerParam === "cron" ? "cron" : "manual";
 
@@ -19,6 +21,9 @@ export async function POST(request: NextRequest) {
         trigger,
         hours: hoursParam ? Number(hoursParam) : undefined,
         warmLimit: warmLimitParam ? Number(warmLimitParam) : undefined,
+        advancedOddsLimit: advancedOddsLimitParam
+          ? Number(advancedOddsLimitParam)
+          : undefined,
       }),
     );
   } catch (error) {
