@@ -280,10 +280,14 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
     "Resultat",
     "Buts",
     "Buts equipe",
+    "Mi-temps",
     "Handicap",
     "Defense",
     "Scenario",
     "Joueurs",
+    "Joueurs - tirs",
+    "Corners",
+    "Cartons",
     "Score exact",
   ];
 
@@ -384,6 +388,30 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
         <p className="text-[11px] text-yellow-500/80 mt-2">
           Cote non confirmee par bookmaker sur ce marche.
         </p>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span
+          className={clsx(
+            "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+            suggestion.data_level === "bookmaker"
+              ? "bg-green-900/40 text-green-300"
+              : suggestion.data_level === "proxy"
+                ? "bg-red-900/40 text-red-300"
+                : "bg-blue-900/40 text-blue-300",
+          )}
+        >
+          {suggestion.data_level === "bookmaker"
+            ? "cote bookmaker"
+            : suggestion.data_level === "proxy"
+              ? "proxy experimental"
+              : "modele"}
+        </span>
+        <span className="text-[10px] text-gray-600">
+          Confiance {suggestion.confidence}
+        </span>
+      </div>
+      {suggestion.data_note && (
+        <p className="text-[11px] text-gray-500 mt-2">{suggestion.data_note}</p>
       )}
     </div>
   );

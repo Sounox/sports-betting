@@ -33,10 +33,18 @@ function poissonProbability(goals: number, lambda: number) {
 
 function poissonOver(lambda: number, line: number) {
   let probability = 0;
-  for (let goals = 0; goals <= 12; goals += 1) {
+  for (let goals = 0; goals <= 18; goals += 1) {
     if (goals > line) probability += poissonProbability(goals, lambda);
   }
   return probability;
+}
+
+function poissonAtLeastOne(lambda: number) {
+  return 1 - Math.exp(-Math.max(0, lambda));
+}
+
+function poissonAtLeastTwo(lambda: number) {
+  return 1 - Math.exp(-Math.max(0, lambda)) * (1 + Math.max(0, lambda));
 }
 
 function scoreMatrix(lambdaHome: number, lambdaAway: number) {
@@ -53,6 +61,15 @@ function scoreMatrix(lambdaHome: number, lambdaAway: number) {
     }
   }
   return scores;
+}
+
+function scoreProbability(
+  scores: Array<{ home: number; away: number; probability: number }>,
+  predicate: (score: { home: number; away: number }) => boolean,
+) {
+  return scores
+    .filter(predicate)
+    .reduce((sum, score) => sum + score.probability, 0);
 }
 
 function riskLevel(probability: number): Impact {
@@ -107,6 +124,8 @@ function makeSuggestion(input: {
   odds?: { price: number; bookmaker: string };
   confidence?: BetSuggestion["confidence"];
   rationale: string;
+  data_level?: BetSuggestion["data_level"];
+  data_note?: string;
   conflict_key: string;
   tags?: string[];
 }): BetSuggestion {
@@ -132,7 +151,9 @@ function makeSuggestion(input: {
     risk_level: input.confidence === "low" ? "aggressive" : riskLevel(probability),
     confidence: input.confidence || (probability >= 0.55 ? "medium" : "low"),
     source: input.source,
+    data_level: input.data_level || (input.odds ? "bookmaker" : "model"),
     rationale: input.rationale,
+    data_note: input.data_note,
     conflict_key: input.conflict_key,
     tags: input.tags || [],
   };
@@ -364,6 +385,179 @@ function buildSuggestions(
     }),
   );
 
+  const bttsAndOver25 = scoreProbability(
+    scores,
+    (score) => score.home > 0 && score.away > 0 && score.home + score.away > 2.5,
+  );
+  const bttsAndUnder45 = scoreProbability(
+    scores,
+    (score) => score.home > 0 && score.away > 0 && score.home + score.away < 4.5,
+  );
+  const noBttsUnder35 = scoreProbability(
+    scores,
+    (score) => (score.home === 0 || score.away === 0) && score.home + score.away < 3.5,
+  );
+  suggestions.push(
+    makeSuggestion({
+      id: "btts_yes_over_25",
+      category: "Buts",
+      market: "BTTS + total",
+      selection: "Oui + plus de 2.5",
+      label: "Les deux equipes marquent + over 2.5",
+      probability: bttsAndOver25,
+      source: "model",
+      confidence: "medium",
+      rationale: "Scenario calcule depuis toute la matrice de scores.",
+      conflict_key: "btts_total_combo",
+      tags: ["btts_yes", "over_2.5"],
+    }),
+    makeSuggestion({
+      id: "btts_yes_under_45",
+      category: "Buts",
+      market: "BTTS + total",
+      selection: "Oui + moins de 4.5",
+      label: "Les deux equipes marquent + under 4.5",
+      probability: bttsAndUnder45,
+      source: "model",
+      confidence: "medium",
+      rationale: "Scenario calcule depuis toute la matrice de scores.",
+      conflict_key: "btts_total_combo",
+      tags: ["btts_yes", "under_4.5"],
+    }),
+    makeSuggestion({
+      id: "btts_no_under_35",
+      category: "Buts",
+      market: "BTTS + total",
+      selection: "Non + moins de 3.5",
+      label: "BTTS non + under 3.5",
+      probability: noBttsUnder35,
+      source: "model",
+      confidence: "medium",
+      rationale: "Scenario defensif derive de la matrice de scores.",
+      conflict_key: "btts_total_combo",
+      tags: ["btts_no", "under_3.5"],
+    }),
+  );
+
+  const noGoal = Math.exp(-totalLambda);
+  const firstGoalHome =
+    totalLambda > 0 ? (lambdaHome / totalLambda) * (1 - noGoal) : 0;
+  const firstGoalAway =
+    totalLambda > 0 ? (lambdaAway / totalLambda) * (1 - noGoal) : 0;
+  suggestions.push(
+    makeSuggestion({
+      id: "first_goal_home",
+      category: "Buts",
+      market: "Premiere equipe qui marque",
+      selection: event.home_team,
+      label: `${event.home_team} marque en premier`,
+      probability: firstGoalHome,
+      source: "model",
+      confidence: "medium",
+      rationale: "Approximation par intensite de buts attendus.",
+      conflict_key: "first_goal",
+      tags: ["first_goal_home", "home_scores"],
+    }),
+    makeSuggestion({
+      id: "first_goal_away",
+      category: "Buts",
+      market: "Premiere equipe qui marque",
+      selection: event.away_team,
+      label: `${event.away_team} marque en premier`,
+      probability: firstGoalAway,
+      source: "model",
+      confidence: "medium",
+      rationale: "Approximation par intensite de buts attendus.",
+      conflict_key: "first_goal",
+      tags: ["first_goal_away", "away_scores"],
+    }),
+    makeSuggestion({
+      id: "no_goal",
+      category: "Buts",
+      market: "Premiere equipe qui marque",
+      selection: "Aucun but",
+      label: "Aucun but dans le match",
+      probability: noGoal,
+      source: "model",
+      confidence: "low",
+      rationale: "Scenario rare derive du total de buts attendu.",
+      conflict_key: "first_goal",
+      tags: ["exact_score", "under_0.5"],
+    }),
+  );
+
+  const halfTimeScores = scoreMatrix(lambdaHome * 0.46, lambdaAway * 0.46);
+  const halfTime = pred.markets?.half_time || {
+    home: scoreProbability(halfTimeScores, (score) => score.home > score.away),
+    draw: scoreProbability(halfTimeScores, (score) => score.home === score.away),
+    away: scoreProbability(halfTimeScores, (score) => score.away > score.home),
+  };
+  if (halfTime) {
+    suggestions.push(
+      makeSuggestion({
+        id: "ht_home",
+        category: "Mi-temps",
+        market: "Resultat mi-temps",
+        selection: event.home_team,
+        label: `${event.home_team} mene a la mi-temps`,
+        probability: halfTime.home,
+        source: "model",
+        confidence: pred.confidence,
+        rationale: "Projection mi-temps derivee des buts attendus.",
+        conflict_key: "half_time_result",
+        tags: ["ht_home"],
+      }),
+      makeSuggestion({
+        id: "ht_draw",
+        category: "Mi-temps",
+        market: "Resultat mi-temps",
+        selection: "Nul",
+        label: "Nul a la mi-temps",
+        probability: halfTime.draw,
+        source: "model",
+        confidence: pred.confidence,
+        rationale: "Projection mi-temps derivee des buts attendus.",
+        conflict_key: "half_time_result",
+        tags: ["ht_draw"],
+      }),
+      makeSuggestion({
+        id: "ht_away",
+        category: "Mi-temps",
+        market: "Resultat mi-temps",
+        selection: event.away_team,
+        label: `${event.away_team} mene a la mi-temps`,
+        probability: halfTime.away,
+        source: "model",
+        confidence: pred.confidence,
+        rationale: "Projection mi-temps derivee des buts attendus.",
+        conflict_key: "half_time_result",
+        tags: ["ht_away"],
+      }),
+    );
+  }
+
+  for (const total of [0, 1, 2, 3, 4]) {
+    const probability =
+      total < 4
+        ? poissonProbability(total, totalLambda)
+        : poissonOver(totalLambda, 3.5);
+    suggestions.push(
+      makeSuggestion({
+        id: `total_goals_${total}${total === 4 ? "_plus" : ""}`,
+        category: "Buts",
+        market: "Nombre exact de buts",
+        selection: total === 4 ? "4+" : String(total),
+        label: total === 4 ? "4 buts ou plus" : `${total} but(s) dans le match`,
+        probability,
+        source: "model",
+        confidence: "low",
+        rationale: "Distribution Poisson du total de buts.",
+        conflict_key: "exact_total_goals",
+        tags: total >= 3 ? ["over_2.5"] : ["under_2.5"],
+      }),
+    );
+  }
+
   for (const [side, team, lambda] of [
     ["home", event.home_team, lambdaHome],
     ["away", event.away_team, lambdaAway],
@@ -500,6 +694,59 @@ function buildSuggestions(
     }),
   );
 
+  const favoriteGap = Math.abs(pred.prob_home - pred.prob_away);
+  const expectedCorners = Math.max(
+    6.5,
+    Math.min(12.5, 8.6 + (totalLambda - 2.4) * 0.85 + favoriteGap * 1.4),
+  );
+  for (const line of [7.5, 8.5, 9.5, 10.5]) {
+    const probability = poissonOver(expectedCorners, line);
+    suggestions.push(
+      makeSuggestion({
+        id: `corners_over_${String(line).replace(".", "_")}`,
+        category: "Corners",
+        market: "Total corners",
+        selection: `Plus de ${line} corners`,
+        label: `Plus de ${line} corners`,
+        probability,
+        source: "model",
+        confidence: "low",
+        rationale: `Proxy sans donnees corners officielles: volume estime ${expectedCorners.toFixed(1)}.`,
+        data_level: "proxy",
+        data_note:
+          "Marche experimental: a confirmer avec une vraie cote bookmaker et des stats corners.",
+        conflict_key: `corners_total_${line}`,
+        tags: ["proxy_model", "corners"],
+      }),
+    );
+  }
+
+  const expectedCards = Math.max(
+    2.2,
+    Math.min(6.8, 3.6 + (1 - favoriteGap) * 0.9 + (event.stage ? 0.35 : 0)),
+  );
+  for (const line of [2.5, 3.5, 4.5]) {
+    const probability = poissonOver(expectedCards, line);
+    suggestions.push(
+      makeSuggestion({
+        id: `cards_over_${String(line).replace(".", "_")}`,
+        category: "Cartons",
+        market: "Total cartons",
+        selection: `Plus de ${line} cartons`,
+        label: `Plus de ${line} cartons`,
+        probability,
+        source: "model",
+        confidence: "low",
+        rationale: `Proxy sans arbitre ni historique cartons: volume estime ${expectedCards.toFixed(1)}.`,
+        data_level: "proxy",
+        data_note:
+          "Marche experimental: ne pas utiliser sans verification compo, arbitre et cote.",
+        conflict_key: `cards_total_${line}`,
+        tags: ["proxy_model", "cards"],
+      }),
+    );
+  }
+
   for (const snapshot of snapshots.filter((item) => item.market === "spreads")) {
     for (const selection of snapshot.selections) {
       const isHome = normalize(selection.name) === normalize(event.home_team);
@@ -554,6 +801,16 @@ function buildSuggestions(
   }
 
   for (const player of (playerInsights?.players || []).slice(0, 10)) {
+    const goalOrAssistProbability =
+      1 -
+      (1 - player.anytime_scorer_probability) *
+        (1 - player.assist_probability);
+    const shotOnTargetLambda =
+      player.expected_goals *
+      (player.position.toLowerCase().includes("midfield") ? 2.1 : 2.7);
+    const shotOnTargetProbability = poissonAtLeastOne(shotOnTargetLambda);
+    const twoShotsOnTargetProbability = poissonAtLeastTwo(shotOnTargetLambda);
+
     suggestions.push(
       makeSuggestion({
         id: `player_score_${player.player_id}`,
@@ -566,7 +823,7 @@ function buildSuggestions(
         confidence: player.reliability,
         rationale: `${player.expected_goals.toFixed(2)} but attendu individuel.`,
         conflict_key: `player_${player.player_id}_goal`,
-        tags: ["player_goal"],
+        tags: ["player_goal", `player_${player.player_id}`],
       }),
       makeSuggestion({
         id: `player_brace_${player.player_id}`,
@@ -579,7 +836,7 @@ function buildSuggestions(
         confidence: "low",
         rationale: "Projection joueur tres volatile.",
         conflict_key: `player_${player.player_id}_brace`,
-        tags: ["player_goal", "high_variance"],
+        tags: ["player_goal", `player_${player.player_id}`, "high_variance"],
       }),
       makeSuggestion({
         id: `player_assist_${player.player_id}`,
@@ -592,7 +849,68 @@ function buildSuggestions(
         confidence: player.reliability,
         rationale: "Projection derivee du poste et des passes tournoi.",
         conflict_key: `player_${player.player_id}_assist`,
-        tags: ["player_assist"],
+        tags: ["player_assist", `player_${player.player_id}`],
+      }),
+      makeSuggestion({
+        id: `player_goal_or_assist_${player.player_id}`,
+        category: "Joueurs",
+        market: "But ou passe",
+        selection: player.player,
+        label: `${player.player} but ou passe decisive`,
+        probability: goalOrAssistProbability,
+        source: "model",
+        confidence: player.reliability,
+        rationale: "Combinaison probabiliste buteur + passeur, avec correction de chevauchement.",
+        conflict_key: `player_${player.player_id}_goal_or_assist`,
+        tags: ["player_goal", "player_assist", `player_${player.player_id}`],
+      }),
+      makeSuggestion({
+        id: `player_sot_${player.player_id}`,
+        category: "Joueurs - tirs",
+        market: "Tir cadre",
+        selection: player.player,
+        label: `${player.player} 1+ tir cadre`,
+        probability: shotOnTargetProbability,
+        source: "model",
+        confidence: "low",
+        rationale: "Proxy derive des xG individuels: pas encore une statistique de tirs observee.",
+        data_level: "proxy",
+        data_note:
+          "A confirmer avec les cotes de tirs cadres du bookmaker avant de jouer.",
+        conflict_key: `player_${player.player_id}_sot`,
+        tags: ["proxy_model", "player_shot", `player_${player.player_id}`],
+      }),
+      makeSuggestion({
+        id: `player_sot_2_${player.player_id}`,
+        category: "Joueurs - tirs",
+        market: "Tirs cadres",
+        selection: player.player,
+        label: `${player.player} 2+ tirs cadres`,
+        probability: twoShotsOnTargetProbability,
+        source: "model",
+        confidence: "low",
+        rationale: "Proxy tres volatil derive des xG individuels.",
+        data_level: "proxy",
+        data_note:
+          "Marche experimental: exclu des combines prudents.",
+        conflict_key: `player_${player.player_id}_sot`,
+        tags: ["proxy_model", "player_shot", `player_${player.player_id}`, "high_variance"],
+      }),
+      makeSuggestion({
+        id: `player_outside_box_${player.player_id}`,
+        category: "Joueurs",
+        market: "But hors surface",
+        selection: player.player,
+        label: `${player.player} marque hors surface`,
+        probability: player.outside_box_goal_probability,
+        source: "model",
+        confidence: "low",
+        rationale: "Projection experimentale derivee du poste et de la proba buteur.",
+        data_level: "proxy",
+        data_note:
+          "Tres haute variance: a traiter comme fun bet, pas comme pari principal.",
+        conflict_key: `player_${player.player_id}_outside_box`,
+        tags: ["proxy_model", "player_goal", `player_${player.player_id}`, "high_variance"],
       }),
     );
   }
@@ -634,6 +952,19 @@ function hasConflict(legs: BetSuggestion[], next: BetSuggestion) {
   if (next.tags.includes("btts_no") && tags.has("btts_yes")) return true;
   if (next.tags.includes("no_draw") && tags.has("draw")) return true;
   if (next.tags.includes("draw") && tags.has("no_draw")) return true;
+  const nextDirectionalResult =
+    next.tags.includes("result_home") || next.tags.includes("result_away");
+  const existingDirectionalResult =
+    tags.has("result_home") || tags.has("result_away");
+  if (next.tags.includes("no_draw") && existingDirectionalResult) return true;
+  if (tags.has("no_draw") && nextDirectionalResult) return true;
+  if (next.tags.includes("no_away_win") && tags.has("result_home")) return true;
+  if (tags.has("no_away_win") && next.tags.includes("result_home")) return true;
+  if (next.tags.includes("no_home_win") && tags.has("result_away")) return true;
+  if (tags.has("no_home_win") && next.tags.includes("result_away")) return true;
+  for (const tag of next.tags) {
+    if (/^player_\d+$/.test(tag) && tags.has(tag)) return true;
+  }
   return false;
 }
 
@@ -646,7 +977,10 @@ function buildSameMatchParlay(
     .filter(
       (suggestion) =>
         suggestion.probability >= 0.32 &&
+        suggestion.confidence !== "low" &&
+        suggestion.data_level !== "proxy" &&
         !suggestion.tags.includes("exact_score") &&
+        !suggestion.tags.includes("proxy_model") &&
         !suggestion.tags.includes("high_variance"),
     )
     .sort(

@@ -164,7 +164,9 @@ export interface BetSuggestion {
   risk_level: string;
   confidence: "low" | "medium" | "high";
   source: "bookmaker" | "model";
+  data_level?: "bookmaker" | "model" | "proxy";
   rationale: string;
+  data_note?: string;
   conflict_key: string;
   tags: string[];
 }
