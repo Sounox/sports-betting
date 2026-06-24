@@ -32,6 +32,7 @@ For an existing database, also apply later migrations in order:
 
 ```bash
 npx wrangler d1 execute sportsbet-history --remote --file=./migrations/0002_backtesting.sql
+npx wrangler d1 execute sportsbet-history --remote --file=./migrations/0003_automation_runs.sql
 ```
 
 4. Deploy:

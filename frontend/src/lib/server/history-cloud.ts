@@ -1,5 +1,6 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import type { Event, OddsSnapshot, ValueBet } from "@/lib/api";
+import { buildMatchContext } from "@/lib/server/ai-cloud";
 import {
   getUpcomingMatches,
   getWorldCupMatches,
@@ -9,6 +10,7 @@ import {
   matchOddsEvent,
   serializeOdds,
 } from "@/lib/server/odds-cloud";
+import { getPlayerInsights } from "@/lib/server/player-cloud";
 
 interface D1PreparedStatement {
   bind(...values: unknown[]): D1PreparedStatement;
@@ -47,6 +49,26 @@ interface SettlementRun {
   message: string | null;
 }
 
+interface AutomationRun {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  mode: string;
+  trigger: string;
+  events_seen: number;
+  upcoming_seen: number;
+  predictions_saved: number;
+  odds_saved: number;
+  value_bets_saved: number;
+  events_settled: number;
+  prediction_markets_settled: number;
+  value_bets_settled: number;
+  players_warmed: number;
+  contexts_warmed: number;
+  message: string | null;
+}
+
 interface StorageStatus {
   enabled: boolean;
   message?: string;
@@ -56,9 +78,11 @@ interface StorageStatus {
   value_bet_snapshots?: number;
   backtest_results?: number;
   settlement_runs?: number;
+  automation_runs?: number;
   refresh_runs?: number;
   latest_refresh?: RefreshRun | null;
   latest_settlement?: SettlementRun | null;
+  latest_automation?: AutomationRun | null;
 }
 
 interface PredictionSnapshotRow {
@@ -217,6 +241,26 @@ CREATE TABLE IF NOT EXISTS settlement_runs (
   events_settled INTEGER DEFAULT 0,
   prediction_markets_settled INTEGER DEFAULT 0,
   value_bets_settled INTEGER DEFAULT 0,
+  message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  status TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  events_seen INTEGER DEFAULT 0,
+  upcoming_seen INTEGER DEFAULT 0,
+  predictions_saved INTEGER DEFAULT 0,
+  odds_saved INTEGER DEFAULT 0,
+  value_bets_saved INTEGER DEFAULT 0,
+  events_settled INTEGER DEFAULT 0,
+  prediction_markets_settled INTEGER DEFAULT 0,
+  value_bets_settled INTEGER DEFAULT 0,
+  players_warmed INTEGER DEFAULT 0,
+  contexts_warmed INTEGER DEFAULT 0,
   message TEXT
 );
 
@@ -560,6 +604,9 @@ export async function getHistoryStatus(): Promise<StorageStatus> {
   const latestSettlement = await db
     .prepare("SELECT * FROM settlement_runs ORDER BY id DESC LIMIT 1")
     .first<SettlementRun>();
+  const latestAutomation = await db
+    .prepare("SELECT * FROM automation_runs ORDER BY id DESC LIMIT 1")
+    .first<AutomationRun>();
 
   return {
     enabled: true,
@@ -569,9 +616,11 @@ export async function getHistoryStatus(): Promise<StorageStatus> {
     value_bet_snapshots: await countTable(db, "value_bet_snapshots"),
     backtest_results: await countTable(db, "backtest_results"),
     settlement_runs: await countTable(db, "settlement_runs"),
+    automation_runs: await countTable(db, "automation_runs"),
     refresh_runs: await countTable(db, "refresh_runs"),
     latest_refresh: latest,
     latest_settlement: latestSettlement,
+    latest_automation: latestAutomation,
   };
 }
 
@@ -1048,6 +1097,153 @@ export async function settleBacktestingResults() {
       await db
         .prepare(
           "UPDATE settlement_runs SET finished_at = ?, status = ?, message = ? WHERE id = ?",
+        )
+        .bind(
+          new Date().toISOString(),
+          "error",
+          error instanceof Error ? error.message : "Erreur inconnue",
+          runId,
+        )
+        .run();
+    }
+    throw error;
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("timeout")), ms);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function warmEventData(event: Event) {
+  try {
+    const players = await withTimeout(getPlayerInsights(event.id), 15000);
+    let contextOk = false;
+    if (players) {
+      await withTimeout(buildMatchContext(event, players), 20000);
+      contextOk = true;
+    }
+    return {
+      players: Boolean(players),
+      context: contextOk,
+    };
+  } catch {
+    return {
+      players: false,
+      context: false,
+    };
+  }
+}
+
+export async function runAutomatedDataRefresh(options: {
+  origin?: string;
+  mode?: "fast" | "full";
+  trigger?: "manual" | "cron";
+  hours?: number;
+  warmLimit?: number;
+} = {}) {
+  const db = getDb();
+  if (!db) {
+    return { ...unavailableStatus(), refreshed: false };
+  }
+  await ensureSchema(db);
+
+  const mode = options.mode || "full";
+  const trigger = options.trigger || "manual";
+  const hours = Math.max(1, Math.min(options.hours || 168, 24 * 30));
+  const warmLimit =
+    options.warmLimit ?? (mode === "full" ? 4 : mode === "fast" ? 0 : 2);
+  const startedAt = new Date().toISOString();
+  const run = await db
+    .prepare(
+      "INSERT INTO automation_runs (started_at, status, mode, trigger, message) VALUES (?, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(startedAt, "running", mode, trigger, "Mise a jour en cours")
+    .first<{ id: number }>();
+  const runId = run?.id;
+
+  try {
+    const snapshot = await createHistorySnapshot(hours);
+    const settlement = await settleBacktestingResults();
+    let playersWarmed = 0;
+    let contextsWarmed = 0;
+
+    if (warmLimit > 0) {
+      const upcoming = await getUpcomingMatches(Math.min(hours, 168));
+      const targets = upcoming.slice(0, warmLimit);
+      const warmResults = await Promise.allSettled(
+        targets.map((event) => warmEventData(event)),
+      );
+      playersWarmed = warmResults.filter(
+        (result) => result.status === "fulfilled" && result.value.players,
+      ).length;
+      contextsWarmed = warmResults.filter(
+        (result) => result.status === "fulfilled" && result.value.context,
+      ).length;
+    }
+
+    if (runId != null) {
+      await db
+        .prepare(
+          `UPDATE automation_runs
+           SET finished_at = ?, status = ?, events_seen = ?, upcoming_seen = ?,
+               predictions_saved = ?, odds_saved = ?, value_bets_saved = ?,
+               events_settled = ?, prediction_markets_settled = ?,
+               value_bets_settled = ?, players_warmed = ?, contexts_warmed = ?,
+               message = ?
+           WHERE id = ?`,
+        )
+        .bind(
+          new Date().toISOString(),
+          "success",
+          snapshot.events_seen ?? 0,
+          snapshot.upcoming_seen ?? 0,
+          snapshot.predictions_saved ?? 0,
+          snapshot.odds_saved ?? 0,
+          snapshot.value_bets_saved ?? 0,
+          settlement.events_settled ?? 0,
+          settlement.prediction_markets_settled ?? 0,
+          settlement.value_bets_settled ?? 0,
+          playersWarmed,
+          contextsWarmed,
+          "Mise a jour terminee",
+          runId,
+        )
+        .run();
+    }
+
+    return {
+      enabled: true,
+      refreshed: true,
+      run_id: runId,
+      mode,
+      trigger,
+      events_seen: snapshot.events_seen ?? 0,
+      upcoming_seen: snapshot.upcoming_seen ?? 0,
+      predictions_saved: snapshot.predictions_saved ?? 0,
+      odds_saved: snapshot.odds_saved ?? 0,
+      value_bets_saved: snapshot.value_bets_saved ?? 0,
+      events_settled: settlement.events_settled ?? 0,
+      prediction_markets_settled:
+        settlement.prediction_markets_settled ?? 0,
+      value_bets_settled: settlement.value_bets_settled ?? 0,
+      players_warmed: playersWarmed,
+      contexts_warmed: contextsWarmed,
+    };
+  } catch (error) {
+    if (runId != null) {
+      await db
+        .prepare(
+          "UPDATE automation_runs SET finished_at = ?, status = ?, message = ? WHERE id = ?",
         )
         .bind(
           new Date().toISOString(),

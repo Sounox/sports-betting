@@ -24,6 +24,7 @@ export default function ConfigPage() {
   const [refreshingOdds, setRefreshingOdds] = useState(false);
   const [runningPreds, setRunningPreds] = useState(false);
   const [snapshotting, setSnapshotting] = useState(false);
+  const [dataRefreshing, setDataRefreshing] = useState(false);
   const [messages, setMessages] = useState<{ text: string; type: "ok" | "err" | "info" }[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [autoInterval, setAutoInterval] = useState(60);
@@ -62,9 +63,7 @@ export default function ConfigPage() {
   const runAutoUpdate = async () => {
     log("⏰ Mise à jour automatique…", "info");
     try {
-      await api.refreshOdds();
-      await api.runPredictions();
-      await api.createHistorySnapshot(168);
+      await api.runDataRefresh("full");
       await loadStatus();
       log("✓ Mise à jour auto terminée", "ok");
     } catch (e: any) { log("✗ Erreur: " + e.message, "err"); }
@@ -123,6 +122,24 @@ export default function ConfigPage() {
     }
   };
 
+  const doDataRefresh = async () => {
+    setDataRefreshing(true);
+    log("Mise a jour complete serveur...", "info");
+    try {
+      const result = await api.runDataRefresh("full");
+      await loadStatus();
+      if (result.refreshed) {
+        log(`MAJ OK: ${result.upcoming_seen || 0} matchs, ${result.odds_saved || 0} lignes cotes, ${result.contexts_warmed || 0} contextes IA`, "ok");
+      } else {
+        log(result.message || "Mise a jour non effectuee", "info");
+      }
+    } catch (e: any) {
+      log("Erreur MAJ complete: " + e.message, "err");
+    } finally {
+      setDataRefreshing(false);
+    }
+  };
+
   const fmtCountdown = (s: number) => `${Math.floor(s / 60)}m${(s % 60).toString().padStart(2, "0")}s`;
 
   return (
@@ -155,7 +172,11 @@ export default function ConfigPage() {
       {/* Actions rapides */}
       <div className="card">
         <h2 className="font-semibold text-white mb-4">Actions rapides</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <button onClick={doDataRefresh} disabled={dataRefreshing} className="btn-primary flex items-center justify-center gap-2 py-3">
+            {dataRefreshing ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+            Mise a jour complete
+          </button>
           <button onClick={doRefreshOdds} disabled={refreshingOdds} className="btn-secondary flex items-center justify-center gap-2 py-3">
             {refreshingOdds ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
             Rafraîchir les cotes bookmakers
@@ -256,6 +277,18 @@ export default function ConfigPage() {
           Mise à jour automatique
         </h2>
         <p className="text-gray-500 text-xs mb-4">Rafraîchit les cotes et recalcule les prédictions automatiquement.</p>
+
+        {historyStatus?.latest_automation && (
+          <div className="mb-4 rounded-xl border border-gray-800 bg-gray-900/60 p-3 text-xs text-gray-400">
+            <div className="font-semibold text-gray-300 mb-1">Derniere mise a jour serveur</div>
+            <div>
+              Statut: {historyStatus.latest_automation.status} - Mode: {historyStatus.latest_automation.mode} - Declenchement: {historyStatus.latest_automation.trigger}
+            </div>
+            <div>
+              {new Date(historyStatus.latest_automation.started_at).toLocaleString("fr-FR")} - {historyStatus.latest_automation.upcoming_seen} matchs a venir - {historyStatus.latest_automation.odds_saved} lignes cotes - {historyStatus.latest_automation.contexts_warmed} contextes IA
+            </div>
+          </div>
+        )}
 
         <div className="flex items-center gap-4 flex-wrap">
           <div

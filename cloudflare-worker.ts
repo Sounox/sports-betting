@@ -17,30 +17,15 @@ export default {
       env.PUBLIC_APP_URL || "https://sports-betting.abl-slancry.workers.dev";
 
     const refresh = async () => {
-      const upcomingResponse = await fetch(
-        `${origin}/api/v1/events/upcoming?hours=168`,
+      const mode = controller.cron === "15 */6 * * *" ? "full" : "fast";
+      const response = await fetch(
+        `${origin}/api/v1/admin/data-refresh?mode=${mode}&trigger=cron&hours=168`,
+        {
+          method: "POST",
+        },
       );
-      if (!upcomingResponse.ok) {
-        throw new Error(`Upcoming refresh failed: ${upcomingResponse.status}`);
-      }
-
-      await fetch(`${origin}/api/v1/events/value-bets`);
-      await fetch(`${origin}/api/v1/admin/history/snapshot?hours=168`, {
-        method: "POST",
-      });
-      await fetch(`${origin}/api/v1/admin/performance/settle`, {
-        method: "POST",
-      });
-      await fetch(`${origin}/api/v1/admin/performance/summary`);
-
-      if (controller.cron === "15 */6 * * *") {
-        const upcoming = (await upcomingResponse.json()) as Array<{ id: number }>;
-        await Promise.allSettled(
-          upcoming.slice(0, 2).flatMap((event) => [
-            fetch(`${origin}/api/v1/events/${event.id}/players`),
-            fetch(`${origin}/api/v1/ai/context/${event.id}`),
-          ]),
-        );
+      if (!response.ok) {
+        throw new Error(`Data refresh failed: ${response.status}`);
       }
     };
 

@@ -75,6 +75,11 @@ export const api = {
     apiFetch<SettlementResponse>("/api/v1/admin/performance/settle", {
       method: "POST",
     }),
+  runDataRefresh: (mode: "fast" | "full" = "full") =>
+    apiFetch<DataRefreshResponse>(
+      `/api/v1/admin/data-refresh?mode=${mode}&trigger=manual&hours=168`,
+      { method: "POST" },
+    ),
   importCompetition: (code: string, season?: number) =>
     apiFetch(`/api/v1/admin/import/${code}${season ? `?season=${season}` : ""}`, { method: "POST" }),
   refreshOdds: () => apiFetch("/api/v1/admin/odds/refresh", { method: "POST" }),
@@ -356,9 +361,11 @@ export interface HistoryStatus {
   value_bet_snapshots?: number;
   backtest_results?: number;
   settlement_runs?: number;
+  automation_runs?: number;
   refresh_runs?: number;
   latest_refresh?: RefreshRun | null;
   latest_settlement?: SettlementRun | null;
+  latest_automation?: AutomationRun | null;
 }
 
 export interface HistorySnapshotResponse extends HistoryStatus {
@@ -408,6 +415,25 @@ export interface SettlementResponse {
   value_bets_settled?: number;
 }
 
+export interface DataRefreshResponse {
+  enabled: boolean;
+  message?: string;
+  refreshed?: boolean;
+  run_id?: number;
+  mode?: "fast" | "full";
+  trigger?: "manual" | "cron";
+  events_seen?: number;
+  upcoming_seen?: number;
+  predictions_saved?: number;
+  odds_saved?: number;
+  value_bets_saved?: number;
+  events_settled?: number;
+  prediction_markets_settled?: number;
+  value_bets_settled?: number;
+  players_warmed?: number;
+  contexts_warmed?: number;
+}
+
 export interface SettlementRun {
   id: number;
   started_at: string;
@@ -417,6 +443,26 @@ export interface SettlementRun {
   events_settled: number;
   prediction_markets_settled: number;
   value_bets_settled: number;
+  message: string | null;
+}
+
+export interface AutomationRun {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  mode: string;
+  trigger: string;
+  events_seen: number;
+  upcoming_seen: number;
+  predictions_saved: number;
+  odds_saved: number;
+  value_bets_saved: number;
+  events_settled: number;
+  prediction_markets_settled: number;
+  value_bets_settled: number;
+  players_warmed: number;
+  contexts_warmed: number;
   message: string | null;
 }
 
