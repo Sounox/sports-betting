@@ -618,6 +618,15 @@ function displayedOdds(suggestion: BetSuggestion) {
   return suggestion.offered_odds || suggestion.fair_odds;
 }
 
+function formatCurrencyEUR(value: number) {
+  return `${value.toFixed(2)} EUR`;
+}
+
+function boundedProbability(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0.01, Math.min(0.99, value));
+}
+
 function isFrenchBookmakerName(bookmaker?: string) {
   if (!bookmaker) return false;
   return /(winamax|betclic|unibet \(fr\)|pmu|parions)/i.test(bookmaker);
@@ -1033,9 +1042,34 @@ function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
     preferredEntry ? marketCatalogKey(preferredEntry) : "",
   );
   const [scope, setScope] = useState<ExplorerScope>("recommended");
+  const [ticketSelectionIds, setTicketSelectionIds] = useState<string[]>([]);
+  const [ticketTargetOdds, setTicketTargetOdds] = useState("3.00");
+  const [ticketStake, setTicketStake] = useState("");
   const selectedEntry =
     catalog.find((entry) => marketCatalogKey(entry) === selectedKey) ||
     preferredEntry;
+  const ticketSuggestions = ticketSelectionIds
+    .map((id) => builder.suggestions.find((suggestion) => suggestion.id === id))
+    .filter((suggestion): suggestion is BetSuggestion => Boolean(suggestion));
+
+  const toggleTicketSuggestion = (suggestion: BetSuggestion) => {
+    setTicketSelectionIds((current) => {
+      if (current.includes(suggestion.id)) {
+        return current.filter((id) => id !== suggestion.id);
+      }
+      if (suggestion.playability === "eviter") return current;
+
+      const withoutConflicts = current.filter((id) => {
+        const selected = builder.suggestions.find((item) => item.id === id);
+        if (!selected) return false;
+        if (!suggestion.conflict_key) return true;
+        return selected.conflict_key !== suggestion.conflict_key;
+      });
+
+      if (withoutConflicts.length >= 5) return current;
+      return [...withoutConflicts, suggestion.id];
+    });
+  };
 
   if (!selectedEntry) return null;
 
@@ -1180,6 +1214,18 @@ function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
             </div>
           </div>
 
+          <MarketExplorerTicket
+            selected={ticketSuggestions}
+            targetOdds={ticketTargetOdds}
+            stake={ticketStake}
+            onTargetOddsChange={setTicketTargetOdds}
+            onStakeChange={setTicketStake}
+            onRemove={(id) =>
+              setTicketSelectionIds((current) => current.filter((selectedId) => selectedId !== id))
+            }
+            onClear={() => setTicketSelectionIds([])}
+          />
+
           {visible.length === 0 ? (
             <div className="rounded-2xl border border-gray-800 bg-gray-900/75 p-4 text-sm text-gray-500">
               Aucune option dans ce filtre pour ce marche.
@@ -1187,7 +1233,16 @@ function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
           ) : (
             <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
               {visible.slice(0, 8).map((suggestion) => (
-                <ExplorerSuggestionCard key={suggestion.id} suggestion={suggestion} />
+                <ExplorerSuggestionCard
+                  key={suggestion.id}
+                  suggestion={suggestion}
+                  selected={ticketSelectionIds.includes(suggestion.id)}
+                  disabled={
+                    suggestion.playability === "eviter" ||
+                    (ticketSuggestions.length >= 5 && !ticketSelectionIds.includes(suggestion.id))
+                  }
+                  onToggle={() => toggleTicketSuggestion(suggestion)}
+                />
               ))}
             </div>
           )}
@@ -1197,10 +1252,183 @@ function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
   );
 }
 
-function ExplorerSuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
+function MarketExplorerTicket({
+  selected,
+  targetOdds,
+  stake,
+  onTargetOddsChange,
+  onStakeChange,
+  onRemove,
+  onClear,
+}: {
+  selected: BetSuggestion[];
+  targetOdds: string;
+  stake: string;
+  onTargetOddsChange: (value: string) => void;
+  onStakeChange: (value: string) => void;
+  onRemove: (id: string) => void;
+  onClear: () => void;
+}) {
+  const totalOdds = selected.reduce((product, suggestion) => product * displayedOdds(suggestion), 1);
+  const estimatedProbability = selected.length
+    ? selected.reduce((product, suggestion) => product * boundedProbability(suggestion.probability), 1)
+    : 0;
+  const approximateEv = selected.length ? estimatedProbability * totalOdds - 1 : 0;
+  const targetValue = Number(targetOdds);
+  const stakeValue = Number(stake);
+  const hasTarget = Number.isFinite(targetValue) && targetValue > 1;
+  const hasStake = Number.isFinite(stakeValue) && stakeValue > 0;
+  const targetGap = hasTarget && selected.length ? totalOdds - targetValue : null;
+  const potentialReturn = hasStake && selected.length ? stakeValue * totalOdds : null;
+  const unconfirmedCount = selected.filter(
+    (suggestion) => suggestion.source !== "bookmaker" || !suggestion.offered_odds,
+  ).length;
+  const negativeEdgeCount = selected.filter(
+    (suggestion) => suggestion.edge != null && suggestion.edge <= 0,
+  ).length;
+
+  return (
+    <div className="rounded-2xl border border-cyan-900/50 bg-cyan-950/10 p-3">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-cyan-300">
+            <Target size={14} />
+            Ticket Market Explorer
+          </div>
+          <p className="mt-1 text-xs text-gray-500">
+            Ajoute des options depuis le marche ouvert. L'outil evite les doublons contradictoires et calcule un ticket approximatif.
+          </p>
+        </div>
+        {selected.length > 0 && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="w-fit rounded-full border border-gray-700 px-3 py-1 text-xs font-semibold text-gray-400 transition-colors hover:border-red-800 hover:text-red-300"
+          >
+            Vider
+          </button>
+        )}
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-[220px_1fr]">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+              Cote cible
+            </span>
+            <input
+              type="number"
+              min="1.1"
+              step="0.1"
+              value={targetOdds}
+              onChange={(event) => onTargetOddsChange(event.target.value)}
+              className="w-full rounded-xl border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+              Mise
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              placeholder="ex: 20"
+              value={stake}
+              onChange={(event) => onStakeChange(event.target.value)}
+              className="w-full rounded-xl border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500"
+            />
+          </label>
+        </div>
+
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+            <Stat label="Selections" value={String(selected.length)} highlight={selected.length ? "green" : undefined} />
+            <Stat label="Cote ticket" value={selected.length ? formatOdds(totalOdds) : "n/a"} highlight={selected.length ? "green" : undefined} />
+            <Stat label="Proba approx." value={selected.length ? `${(estimatedProbability * 100).toFixed(1)}%` : "n/a"} />
+            <Stat
+              label="EV approx."
+              value={selected.length ? `${approximateEv >= 0 ? "+" : ""}${(approximateEv * 100).toFixed(1)}%` : "n/a"}
+              highlight={selected.length ? (approximateEv > 0 ? "green" : "red") : undefined}
+            />
+            <Stat label="Retour" value={potentialReturn == null ? "n/a" : formatCurrencyEUR(potentialReturn)} />
+          </div>
+
+          {selected.length === 0 ? (
+            <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-3 text-xs text-gray-500">
+              Selectionne une ou plusieurs options ci-dessous pour composer un ticket sur ce match.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {selected.map((suggestion, index) => (
+                <div
+                  key={suggestion.id}
+                  className="flex items-start justify-between gap-3 rounded-xl border border-gray-800 bg-gray-950/65 px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-white">
+                      {index + 1}. {suggestion.label}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-gray-500">
+                      {formatOdds(displayedOdds(suggestion))} - proba modele {(suggestion.probability * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onRemove(suggestion.id)}
+                    className="shrink-0 rounded-full border border-gray-700 px-2 py-1 text-[10px] font-semibold text-gray-500 transition-colors hover:border-red-800 hover:text-red-300"
+                  >
+                    Retirer
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {selected.length > 0 && (
+            <div className="space-y-1 rounded-xl border border-yellow-900/40 bg-yellow-950/10 p-3 text-[11px] text-yellow-200/80">
+              {targetGap != null && targetGap < 0 && (
+                <p>La cote cible n'est pas atteinte: il manque environ {Math.abs(targetGap).toFixed(2)} point(s) de cote.</p>
+              )}
+              {targetGap != null && targetGap >= 0 && (
+                <p>La cote cible est atteinte, mais ce n'est pas une garantie: le ticket reste probabiliste.</p>
+              )}
+              {selected.length > 1 && (
+                <p>Attention: selections sur le meme match, correlation possible. La proba et l'EV sont des approximations.</p>
+              )}
+              {unconfirmedCount > 0 && (
+                <p>{unconfirmedCount} selection(s) utilisent une cote modele/proxy non confirmee par bookmaker.</p>
+              )}
+              {negativeEdgeCount > 0 && (
+                <p>{negativeEdgeCount} selection(s) ont un edge non positif: a surveiller plutot qu'a recommander.</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExplorerSuggestionCard({
+  suggestion,
+  selected,
+  disabled,
+  onToggle,
+}: {
+  suggestion: BetSuggestion;
+  selected: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
   const playable = suggestion.source === "bookmaker" && suggestion.offered_odds;
   return (
-    <div className="rounded-2xl border border-gray-800 bg-gray-900/85 p-3">
+    <div
+      className={clsx(
+        "rounded-2xl border bg-gray-900/85 p-3 transition-colors",
+        selected ? "border-cyan-500/70 shadow-[0_0_0_1px_rgba(34,211,238,0.2)]" : "border-gray-800",
+      )}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="font-semibold text-white">{suggestion.label}</div>
@@ -1268,6 +1496,22 @@ function ExplorerSuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
       </div>
 
       <p className="mt-3 line-clamp-2 text-xs text-gray-500">{suggestion.rationale}</p>
+
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={disabled && !selected}
+        className={clsx(
+          "mt-3 w-full rounded-xl border px-3 py-2 text-xs font-bold transition-colors",
+          selected
+            ? "border-cyan-600 bg-cyan-950/35 text-cyan-200 hover:border-cyan-400"
+            : disabled
+              ? "cursor-not-allowed border-gray-800 bg-gray-950 text-gray-600"
+              : "border-gray-700 bg-gray-950/70 text-gray-300 hover:border-cyan-700 hover:text-cyan-200",
+        )}
+      >
+        {selected ? "Retirer du ticket" : disabled ? "Non retenu" : "Ajouter au ticket"}
+      </button>
     </div>
   );
 }
