@@ -633,6 +633,7 @@ function isFrenchSuggestion(suggestion: BetSuggestion) {
 
 type OddsScope = "fr" | "book" | "model";
 type CatalogScope = "all" | "fr" | "book" | "model";
+type ExplorerScope = "recommended" | "fr" | "book" | "model";
 
 function suggestionMatchesScope(suggestion: BetSuggestion, scope: OddsScope) {
   if (scope === "fr") {
@@ -653,6 +654,44 @@ function catalogMatchesScope(entry: MatchMarketCatalogEntry, scope: CatalogScope
     return entry.status === "model_only" || entry.status === "proxy_only";
   }
   return true;
+}
+
+function marketCatalogKey(entry: Pick<MatchMarketCatalogEntry, "category" | "market">) {
+  return `${entry.category}::${entry.market}`;
+}
+
+function suggestionMatchesCatalogEntry(
+  suggestion: BetSuggestion,
+  entry: MatchMarketCatalogEntry,
+) {
+  return suggestion.category === entry.category && suggestion.market === entry.market;
+}
+
+function explorerMatchesScope(suggestion: BetSuggestion, scope: ExplorerScope) {
+  if (scope === "recommended") return suggestion.playability !== "eviter";
+  if (scope === "fr") return suggestion.source === "bookmaker" && isFrenchSuggestion(suggestion);
+  if (scope === "book") return suggestion.source === "bookmaker";
+  return suggestion.source !== "bookmaker";
+}
+
+function explorerSuggestionScore(suggestion: BetSuggestion) {
+  const playability =
+    suggestion.playability === "jouable"
+      ? 1000
+      : suggestion.playability === "surveillance"
+        ? 500
+        : 0;
+  const source =
+    suggestion.odds_source === "french_bookmaker"
+      ? 180
+      : suggestion.source === "bookmaker"
+        ? 90
+        : suggestion.data_level === "proxy"
+          ? -80
+          : 20;
+  const edge = suggestion.edge == null ? -20 : suggestion.edge * 220;
+  const reliability = suggestion.reliability_score || 0;
+  return playability + source + reliability + edge + suggestion.probability * 40;
 }
 
 function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
@@ -750,6 +789,10 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
 
       {builder.market_catalog && builder.market_catalog.length > 0 && (
         <MarketCatalogPanel catalog={builder.market_catalog} />
+      )}
+
+      {builder.market_catalog && builder.market_catalog.length > 0 && (
+        <MarketExplorerPanel builder={builder} />
       )}
 
       <div className="flex flex-col gap-2 rounded-2xl border border-gray-800 bg-gray-950/60 p-3 md:flex-row md:items-center md:justify-between">
@@ -976,6 +1019,255 @@ function MarketCatalogCard({ entry }: { entry: MatchMarketCatalogEntry }) {
         <span>{entry.playable_count} jouable(s)</span>
         <span>fiab. {entry.average_reliability == null ? "n/a" : `${entry.average_reliability.toFixed(0)}/100`}</span>
       </div>
+    </div>
+  );
+}
+
+function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
+  const catalog = builder.market_catalog || [];
+  const preferredEntry =
+    catalog.find((entry) => entry.playable_count > 0 && entry.status === "fr_available") ||
+    catalog.find((entry) => entry.playable_count > 0) ||
+    catalog[0];
+  const [selectedKey, setSelectedKey] = useState(
+    preferredEntry ? marketCatalogKey(preferredEntry) : "",
+  );
+  const [scope, setScope] = useState<ExplorerScope>("recommended");
+  const selectedEntry =
+    catalog.find((entry) => marketCatalogKey(entry) === selectedKey) ||
+    preferredEntry;
+
+  if (!selectedEntry) return null;
+
+  const marketSuggestions = builder.suggestions
+    .filter((suggestion) => suggestionMatchesCatalogEntry(suggestion, selectedEntry))
+    .sort((a, b) => explorerSuggestionScore(b) - explorerSuggestionScore(a));
+  const recommendedCount = marketSuggestions.filter((suggestion) =>
+    explorerMatchesScope(suggestion, "recommended"),
+  ).length;
+  const frCount = marketSuggestions.filter((suggestion) =>
+    explorerMatchesScope(suggestion, "fr"),
+  ).length;
+  const bookCount = marketSuggestions.filter((suggestion) =>
+    explorerMatchesScope(suggestion, "book"),
+  ).length;
+  const modelCount = marketSuggestions.filter((suggestion) =>
+    explorerMatchesScope(suggestion, "model"),
+  ).length;
+  const visible = marketSuggestions.filter((suggestion) =>
+    explorerMatchesScope(suggestion, scope),
+  );
+  const status = marketStatusCopy(selectedEntry.status);
+
+  return (
+    <div className="rounded-2xl border border-emerald-900/40 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.13),transparent_34%),rgba(6,78,59,0.08)] p-3">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-emerald-300">
+            <Sparkles size={14} />
+            Market Explorer
+          </div>
+          <h3 className="mt-1 text-lg font-black text-white">
+            Explorer un marche precis
+          </h3>
+          <p className="mt-1 text-xs text-gray-500">
+            Selectionne un marche, puis compare les cotes FR, fallbacks books et projections modele sans bruit autour.
+          </p>
+        </div>
+        <span className={clsx("w-fit rounded-full border px-3 py-1.5 text-xs font-bold", status.className)}>
+          {status.label}
+        </span>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-[280px_1fr]">
+        <div className="space-y-2">
+          <div className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
+            Choisir le marche
+          </div>
+          <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1 scrollbar-none">
+            {catalog.map((entry) => {
+              const active = marketCatalogKey(entry) === marketCatalogKey(selectedEntry);
+              const entryStatus = marketStatusCopy(entry.status);
+              return (
+                <button
+                  key={marketCatalogKey(entry)}
+                  type="button"
+                  onClick={() => setSelectedKey(marketCatalogKey(entry))}
+                  className={clsx(
+                    "w-full rounded-2xl border p-3 text-left transition-colors",
+                    active
+                      ? "border-emerald-600/70 bg-emerald-950/35"
+                      : "border-gray-800 bg-gray-950/35 hover:border-gray-700",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-[10px] uppercase tracking-wide text-gray-600">
+                        {entry.category}
+                      </div>
+                      <div className="mt-0.5 text-sm font-semibold text-white">
+                        {entry.market}
+                      </div>
+                    </div>
+                    <span className={clsx("shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-bold", entryStatus.className)}>
+                      {entryStatus.label}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-gray-500">
+                    <span>{entry.total_selections} selections</span>
+                    <span>·</span>
+                    <span>{entry.playable_count} jouable(s)</span>
+                    {entry.average_reliability != null && (
+                      <>
+                        <span>·</span>
+                        <span>{entry.average_reliability.toFixed(0)}/100</span>
+                      </>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-gray-800 bg-gray-950/45 p-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-gray-600">
+                  {selectedEntry.category}
+                </div>
+                <h4 className="mt-0.5 text-xl font-black text-white">
+                  {selectedEntry.market}
+                </h4>
+                <p className="mt-1 text-xs text-gray-500">
+                  {selectedEntry.available_bookmakers.length
+                    ? `Books: ${selectedEntry.available_bookmakers.join(", ")}`
+                    : "Aucune cote bookmaker: marche estime par le modele."}
+                </p>
+              </div>
+              <div className="grid grid-cols-4 gap-2 text-center md:min-w-[360px]">
+                <Stat label="FR" value={String(selectedEntry.french_bookmaker_selections)} highlight={selectedEntry.french_bookmaker_selections ? "green" : undefined} />
+                <Stat label="Book" value={String(selectedEntry.global_bookmaker_selections)} />
+                <Stat label="Jouable" value={String(selectedEntry.playable_count)} highlight={selectedEntry.playable_count ? "green" : undefined} />
+                <Stat label="Eviter" value={String(selectedEntry.avoid_count)} highlight={selectedEntry.avoid_count ? "red" : undefined} />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 rounded-2xl border border-gray-800 bg-gray-950/45 p-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                Affichage des options
+              </div>
+              <div className="mt-1 text-[11px] text-gray-600">
+                Le tri favorise jouable, cote FR, edge positif et fiabilite.
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <FilterPill active={scope === "recommended"} onClick={() => setScope("recommended")}>
+                Recommandees ({recommendedCount})
+              </FilterPill>
+              <FilterPill active={scope === "fr"} onClick={() => setScope("fr")}>
+                FR ({frCount})
+              </FilterPill>
+              <FilterPill active={scope === "book"} onClick={() => setScope("book")}>
+                Books ({bookCount})
+              </FilterPill>
+              <FilterPill active={scope === "model"} onClick={() => setScope("model")}>
+                Modele/proxy ({modelCount})
+              </FilterPill>
+            </div>
+          </div>
+
+          {visible.length === 0 ? (
+            <div className="rounded-2xl border border-gray-800 bg-gray-900/75 p-4 text-sm text-gray-500">
+              Aucune option dans ce filtre pour ce marche.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 xl:grid-cols-2">
+              {visible.slice(0, 8).map((suggestion) => (
+                <ExplorerSuggestionCard key={suggestion.id} suggestion={suggestion} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExplorerSuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
+  const playable = suggestion.source === "bookmaker" && suggestion.offered_odds;
+  return (
+    <div className="rounded-2xl border border-gray-800 bg-gray-900/85 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-white">{suggestion.label}</div>
+          <div className="mt-1 text-xs text-gray-500">{suggestion.selection}</div>
+        </div>
+        <span
+          className={clsx(
+            "shrink-0 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wide",
+            suggestion.playability === "jouable"
+              ? "bg-emerald-900/40 text-emerald-300"
+              : suggestion.playability === "eviter"
+                ? "bg-red-900/40 text-red-300"
+                : "bg-amber-900/40 text-amber-300",
+          )}
+        >
+          {suggestion.playability || "surveillance"}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+        <Stat label="Modele" value={`${(suggestion.probability * 100).toFixed(1)}%`} />
+        <Stat
+          label={playable ? "Cote" : "Fair"}
+          value={formatOdds(playable ? suggestion.offered_odds : suggestion.fair_odds)}
+          highlight={playable && isFrenchSuggestion(suggestion) ? "green" : undefined}
+        />
+        <Stat
+          label="Edge"
+          value={suggestion.edge == null ? "n/a" : `${suggestion.edge > 0 ? "+" : ""}${(suggestion.edge * 100).toFixed(1)}%`}
+          highlight={suggestion.edge == null ? undefined : suggestion.edge > 0 ? "green" : "red"}
+        />
+        <Stat
+          label="Fiab."
+          value={suggestion.reliability_score == null ? "n/a" : `${suggestion.reliability_score.toFixed(0)}`}
+        />
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span
+          className={clsx(
+            "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+            suggestion.source === "bookmaker"
+              ? isFrenchSuggestion(suggestion)
+                ? "bg-emerald-900/40 text-emerald-300"
+                : "bg-blue-900/40 text-blue-300"
+              : suggestion.data_level === "proxy"
+                ? "bg-red-900/40 text-red-300"
+                : "bg-gray-800 text-gray-300",
+          )}
+        >
+          {suggestion.source === "bookmaker"
+            ? isFrenchSuggestion(suggestion)
+              ? "cote FR"
+              : "fallback book"
+            : suggestion.data_level === "proxy"
+              ? "proxy"
+              : "modele"}
+        </span>
+        {suggestion.bookmaker_display || suggestion.bookmaker ? (
+          <span className="text-[10px] text-gray-500">
+            {suggestion.bookmaker_display || suggestion.bookmaker}
+          </span>
+        ) : null}
+        {suggestion.market_signal && <MarketSignalBadge signal={suggestion.market_signal} />}
+      </div>
+
+      <p className="mt-3 line-clamp-2 text-xs text-gray-500">{suggestion.rationale}</p>
     </div>
   );
 }
