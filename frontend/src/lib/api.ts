@@ -145,6 +145,13 @@ export interface ValueBet {
   ev: number;
   odds: number;
   bookmaker: string;
+  bookmaker_key?: string;
+  odds_source?: "french_bookmaker" | "global_bookmaker" | "model" | "proxy";
+  is_french_bookmaker?: boolean;
+  bookmaker_priority?: number;
+  bookmaker_country?: string;
+  bookmaker_display?: string;
+  bookmaker_source_label?: string;
   recommendation_score: number;
   kelly_stake_pct: number;
   recommended_stake_pct: number;
@@ -155,6 +162,13 @@ export interface ValueBet {
 
 export interface OddsSnapshot {
   bookmaker: string;
+  bookmaker_key?: string;
+  odds_source?: "french_bookmaker" | "global_bookmaker";
+  is_french_bookmaker?: boolean;
+  bookmaker_priority?: number;
+  bookmaker_country?: string;
+  bookmaker_display?: string;
+  bookmaker_source_label?: string;
   market: string;
   selections: {
     key: string;
@@ -178,6 +192,13 @@ export interface BetSuggestion {
   fair_odds: number;
   offered_odds?: number;
   bookmaker?: string;
+  bookmaker_key?: string;
+  odds_source?: "french_bookmaker" | "global_bookmaker" | "model" | "proxy";
+  is_french_bookmaker?: boolean;
+  bookmaker_priority?: number;
+  bookmaker_country?: string;
+  bookmaker_display?: string;
+  bookmaker_source_label?: string;
   edge?: number;
   ev?: number;
   risk_level: string;
@@ -250,6 +271,16 @@ export interface MatchBetBuilder {
   bookmaker_markets: number;
   model_markets: number;
   preferred_bookmakers: string[];
+  odds_coverage?: {
+    availability: "good" | "partial" | "none";
+    french_markets: number;
+    global_markets: number;
+    french_bookmakers: string[];
+    global_bookmakers: string[];
+    available_markets: string[];
+    missing_priority_bookmakers: string[];
+    note: string;
+  };
   warnings: string[];
 }
 
@@ -382,6 +413,9 @@ export interface RecommendationSingle {
   label: string;
   odds: number;
   bookmaker: string;
+  odds_source?: "french_bookmaker" | "global_bookmaker" | "model" | "proxy";
+  bookmaker_source_label?: string;
+  is_french_bookmaker?: boolean;
   model_prob: number;
   fair_prob: number;
   edge: number;
@@ -407,6 +441,9 @@ export interface RecommendationParlay {
     label: string;
     odds: number;
     bookmaker: string;
+    odds_source?: "french_bookmaker" | "global_bookmaker" | "model" | "proxy";
+    bookmaker_source_label?: string;
+    is_french_bookmaker?: boolean;
     model_prob: number;
     edge: number;
     score: number;
@@ -465,6 +502,10 @@ export interface MarketRadarSuggestion {
   fair_odds: number;
   offered_odds?: number;
   bookmaker?: string;
+  odds_source?: "french_bookmaker" | "global_bookmaker" | "model" | "proxy";
+  bookmaker_source_label?: string;
+  bookmaker_display?: string;
+  is_french_bookmaker?: boolean;
   edge?: number;
   risk_level: string;
   confidence: string;

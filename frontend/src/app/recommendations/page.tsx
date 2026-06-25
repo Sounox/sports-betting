@@ -289,9 +289,17 @@ function isFrenchBookmakerName(bookmaker?: string) {
   return /(winamax|betclic|unibet \(fr\)|pmu|parions)/i.test(bookmaker);
 }
 
+function isFrenchRadarSuggestion(suggestion: MarketRadarSuggestion) {
+  return (
+    suggestion.odds_source === "french_bookmaker" ||
+    Boolean(suggestion.is_french_bookmaker) ||
+    isFrenchBookmakerName(suggestion.bookmaker)
+  );
+}
+
 function radarMatchesScope(suggestion: MarketRadarSuggestion, scope: OddsScope) {
   if (scope === "fr") {
-    return suggestion.source === "bookmaker" && isFrenchBookmakerName(suggestion.bookmaker);
+    return suggestion.source === "bookmaker" && isFrenchRadarSuggestion(suggestion);
   }
   if (scope === "book") {
     return suggestion.source === "bookmaker";
@@ -477,7 +485,7 @@ function RadarCard({ suggestion }: { suggestion: MarketRadarSuggestion }) {
       <div className="grid grid-cols-3 gap-2 mt-3">
         <Mini label="Modele" value={pct(suggestion.probability)} />
         <Mini
-          label={playable ? suggestion.bookmaker || "Book" : "Cote fair"}
+          label={playable ? suggestion.bookmaker_display || suggestion.bookmaker || "Book" : "Cote fair"}
           value={(playable ? suggestion.offered_odds : suggestion.fair_odds)?.toFixed(2) || "n/a"}
           good={Boolean(playable)}
         />
@@ -510,6 +518,11 @@ function RadarCard({ suggestion }: { suggestion: MarketRadarSuggestion }) {
       </div>
 
       <p className="text-xs text-gray-500 mt-3 line-clamp-2">{suggestion.rationale}</p>
+      {playable && suggestion.bookmaker_source_label && (
+        <p className="text-[11px] text-gray-600 mt-1 line-clamp-1">
+          Source cote: {suggestion.bookmaker_source_label}
+        </p>
+      )}
       <p className="text-[11px] text-yellow-500/80 mt-2 line-clamp-2">{suggestion.data_note}</p>
     </Link>
   );

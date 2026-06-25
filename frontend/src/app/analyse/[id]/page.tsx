@@ -584,11 +584,19 @@ function isFrenchBookmakerName(bookmaker?: string) {
   return /(winamax|betclic|unibet \(fr\)|pmu|parions)/i.test(bookmaker);
 }
 
+function isFrenchSuggestion(suggestion: BetSuggestion) {
+  return (
+    suggestion.odds_source === "french_bookmaker" ||
+    Boolean(suggestion.is_french_bookmaker) ||
+    isFrenchBookmakerName(suggestion.bookmaker)
+  );
+}
+
 type OddsScope = "fr" | "book" | "model";
 
 function suggestionMatchesScope(suggestion: BetSuggestion, scope: OddsScope) {
   if (scope === "fr") {
-    return suggestion.source === "bookmaker" && isFrenchBookmakerName(suggestion.bookmaker);
+    return suggestion.source === "bookmaker" && isFrenchSuggestion(suggestion);
   }
   if (scope === "book") {
     return suggestion.source === "bookmaker";
@@ -659,6 +667,35 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
           </span>
         ))}
       </div>
+
+      {builder.odds_coverage && (
+        <div className="grid grid-cols-1 gap-3 rounded-2xl border border-emerald-900/40 bg-emerald-950/10 p-3 md:grid-cols-[1.2fr_0.8fr]">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+              Couverture bookmakers francais
+            </div>
+            <p className="mt-1 text-xs text-gray-400">{builder.odds_coverage.note}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {(builder.odds_coverage.french_bookmakers.length
+                ? builder.odds_coverage.french_bookmakers
+                : ["Aucun book FR detecte"]
+              ).map((bookmaker) => (
+                <span
+                  key={bookmaker}
+                  className="rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2.5 py-1 text-[11px] text-emerald-200"
+                >
+                  {bookmaker}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <Stat label="Marches FR" value={String(builder.odds_coverage.french_markets)} highlight="green" />
+            <Stat label="Fallbacks" value={String(builder.odds_coverage.global_markets)} />
+            <Stat label="Statut" value={builder.odds_coverage.availability} />
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-2 rounded-2xl border border-gray-800 bg-gray-950/60 p-3 md:flex-row md:items-center md:justify-between">
         <div>
@@ -767,9 +804,9 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
         <Stat label="Modele" value={`${(suggestion.probability * 100).toFixed(1)}%`} />
         <Stat
-          label={playable ? suggestion.bookmaker || "Book" : "Estimation"}
+          label={playable ? suggestion.bookmaker_display || suggestion.bookmaker || "Book" : "Estimation"}
           value={formatOdds(playable ? suggestion.offered_odds : displayedOdds(suggestion))}
-          highlight={playable && isFrenchBookmakerName(suggestion.bookmaker) ? "green" : undefined}
+          highlight={playable && isFrenchSuggestion(suggestion) ? "green" : undefined}
         />
         <Stat
           label="Edge"
@@ -802,7 +839,7 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
           )}
         >
           {suggestion.data_level === "bookmaker"
-            ? isFrenchBookmakerName(suggestion.bookmaker)
+            ? isFrenchSuggestion(suggestion)
               ? "cote FR"
               : "fallback book"
             : suggestion.data_level === "proxy"
@@ -815,6 +852,11 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
       </div>
       {suggestion.data_note && (
         <p className="text-[11px] text-gray-500 mt-2">{suggestion.data_note}</p>
+      )}
+      {playable && suggestion.bookmaker_source_label && (
+        <p className="text-[11px] text-gray-600 mt-1">
+          Source cote: {suggestion.bookmaker_source_label}
+        </p>
       )}
     </div>
   );

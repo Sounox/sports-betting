@@ -1,4 +1,19 @@
 import type { Event, OddsSnapshot, ValueBet } from "@/lib/api";
+import {
+  FRENCH_BOOKMAKER_PRIORITY,
+  bookmakerPreferenceRank,
+  bookmakerSourceMeta,
+  isFrenchBookmaker,
+  preferBookmakerOdd,
+} from "@/lib/server/french-bookmakers";
+
+export {
+  FRENCH_BOOKMAKER_PRIORITY,
+  bookmakerPreferenceRank,
+  bookmakerSourceMeta,
+  isFrenchBookmaker,
+  summarizeFrenchOddsCoverage,
+} from "@/lib/server/french-bookmakers";
 
 const ODDS_API_BASE = "https://api.the-odds-api.com/v4";
 const ODDS_API_KEY =
@@ -65,46 +80,12 @@ interface CandidateOdd {
   updatedAt: string;
 }
 
-export const FRENCH_BOOKMAKER_PRIORITY = [
-  "Winamax (FR)",
-  "Betclic (FR)",
-  "Unibet (FR)",
-  "PMU (FR)",
-  "Parions Sport",
-  "ParionsSport",
-];
-
 function normalize(value: string) {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
-}
-
-export function bookmakerPreferenceRank(bookmaker?: string | null) {
-  if (!bookmaker) return 999;
-  const normalized = normalize(bookmaker);
-  const index = FRENCH_BOOKMAKER_PRIORITY.findIndex((candidate) =>
-    normalized.includes(normalize(candidate)),
-  );
-  if (index >= 0) return index;
-  if (normalized.includes("fr")) return 20;
-  return 100;
-}
-
-export function isFrenchBookmaker(bookmaker?: string | null) {
-  return bookmakerPreferenceRank(bookmaker) < 100;
-}
-
-function preferBookmakerOdd<T extends { price: number; bookmakerTitle?: string; bookmaker?: string }>(
-  left: T,
-  right: T,
-) {
-  const leftRank = bookmakerPreferenceRank(left.bookmakerTitle || left.bookmaker);
-  const rightRank = bookmakerPreferenceRank(right.bookmakerTitle || right.bookmaker);
-  if (leftRank !== rightRank) return leftRank < rightRank ? left : right;
-  return left.price >= right.price ? left : right;
 }
 
 function median(values: number[]) {
@@ -414,6 +395,8 @@ export function calculateValueBets(
       ev: Number(ev.toFixed(4)),
       odds: candidate.price,
       bookmaker: candidate.bookmakerTitle,
+      bookmaker_key: candidate.bookmaker,
+      ...bookmakerSourceMeta(candidate.bookmakerTitle, candidate.bookmaker),
       recommendation_score: Number(
         recommendationScore(
           edge,
@@ -445,6 +428,7 @@ export function serializeOdds(
   for (const bookmaker of oddsEvent.bookmakers || []) {
     for (const market of bookmaker.markets || []) {
       if (market.key.endsWith("_lay") || market.key.includes("_lay_")) continue;
+      const sourceMeta = bookmakerSourceMeta(bookmaker.title, bookmaker.key);
       const overround = market.outcomes.reduce(
         (sum, outcome) =>
           outcome.price > 1 ? sum + 1 / outcome.price : sum,
@@ -452,6 +436,8 @@ export function serializeOdds(
       );
       snapshots.push({
         bookmaker: bookmaker.title,
+        bookmaker_key: bookmaker.key,
+        ...sourceMeta,
         market: market.key,
         selections: market.outcomes.map((outcome) => ({
           key: normalize(outcome.name),

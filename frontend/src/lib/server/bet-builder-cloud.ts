@@ -18,9 +18,11 @@ import {
   getWorldCupEventOdds,
   getWorldCupOdds,
   bookmakerPreferenceRank,
+  bookmakerSourceMeta,
   isFrenchBookmaker,
   matchOddsEvent,
   serializeOdds,
+  summarizeFrenchOddsCoverage,
 } from "@/lib/server/odds-cloud";
 
 type Impact = BetSuggestion["risk_level"];
@@ -336,6 +338,25 @@ function makeSuggestion(input: {
   const impliedProb = offeredOdds ? 1 / offeredOdds : undefined;
   const edge = impliedProb == null ? undefined : probability - impliedProb;
   const ev = offeredOdds == null ? undefined : probability * offeredOdds - 1;
+  const sourceMeta = input.odds
+    ? bookmakerSourceMeta(input.odds.bookmaker)
+    : input.data_level === "proxy"
+      ? {
+          odds_source: "proxy" as const,
+          is_french_bookmaker: false,
+          bookmaker_priority: 999,
+          bookmaker_country: undefined,
+          bookmaker_display: undefined,
+          bookmaker_source_label: "Projection proxy sans cote bookmaker",
+        }
+      : {
+          odds_source: "model" as const,
+          is_french_bookmaker: false,
+          bookmaker_priority: 999,
+          bookmaker_country: undefined,
+          bookmaker_display: undefined,
+          bookmaker_source_label: "Cote fair estimee par le modele",
+        };
 
   return {
     id: input.id,
@@ -347,6 +368,7 @@ function makeSuggestion(input: {
     fair_odds: modelFairOdds,
     offered_odds: offeredOdds,
     bookmaker: input.odds?.bookmaker,
+    ...sourceMeta,
     edge: edge == null ? undefined : round(edge),
     ev: ev == null ? undefined : round(ev),
     risk_level: input.confidence === "low" ? "aggressive" : riskLevel(probability),
@@ -605,6 +627,13 @@ function reliabilityAssessment(suggestion: BetSuggestion) {
   if (suggestion.data_level === "bookmaker") {
     score += 12;
     reasons.push("cote bookmaker disponible");
+    if (suggestion.odds_source === "french_bookmaker") {
+      score += 4;
+      reasons.push("book francais prioritaire");
+    } else {
+      score -= 2;
+      reasons.push("fallback bookmaker non FR");
+    }
   } else if (suggestion.data_level === "proxy") {
     score -= 18;
     reasons.push("projection proxy experimentale");
@@ -1798,6 +1827,7 @@ export async function getMatchBetBuilder(
     buildSuggestions(event, players, snapshots),
     movements,
   );
+  const oddsCoverage = summarizeFrenchOddsCoverage(snapshots);
 
   return {
     event_id: eventId,
@@ -1809,7 +1839,9 @@ export async function getMatchBetBuilder(
       ...FRENCH_BOOKMAKER_PRIORITY,
       "Fallback: meilleure cote globale si aucune cote FR n'est disponible",
     ],
+    odds_coverage: oddsCoverage,
     warnings: [
+      `Couverture FR: ${oddsCoverage.french_markets} marche(s) via ${oddsCoverage.french_bookmakers.join(", ") || "aucun bookmaker FR"}.`,
       "Priorite d'affichage: Winamax FR, Betclic FR, Unibet FR, PMU FR, puis fallback global.",
       "Les marchés joueurs et scénarios sont des projections modèle si aucune cote bookmaker n'est disponible.",
       "Les cotes joueurs bookmaker viennent des marchés événement disponibles et peuvent varier selon les books.",
