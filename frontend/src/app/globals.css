@@ -11,11 +11,15 @@
 }
 
 @layer components {
-  .card { @apply bg-gray-900 border border-gray-800 rounded-xl p-4; }
+  .card { @apply rounded-2xl border border-gray-800 bg-gray-900/90 p-3 shadow-[0_16px_48px_rgba(0,0,0,0.18)] sm:p-4; }
   .badge-value { @apply bg-green-900/60 text-green-400 border border-green-800 text-xs font-semibold px-2 py-0.5 rounded-full; }
   .badge-warn  { @apply bg-yellow-900/60 text-yellow-400 border border-yellow-800 text-xs font-semibold px-2 py-0.5 rounded-full; }
   .badge-risk  { @apply bg-red-900/60 text-red-400 border border-red-800 text-xs font-semibold px-2 py-0.5 rounded-full; }
   .badge-low   { @apply bg-gray-800 text-gray-400 text-xs font-semibold px-2 py-0.5 rounded-full; }
   .btn-primary { @apply bg-green-600 hover:bg-green-500 text-white font-semibold px-4 py-2 rounded-lg transition-colors; }
   .btn-secondary { @apply bg-gray-800 hover:bg-gray-700 text-gray-200 font-medium px-4 py-2 rounded-lg transition-colors; }
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+  .tap-card { @apply active:scale-[0.99] transition-transform; }
+  .soft-panel { @apply rounded-2xl border border-gray-800 bg-gray-950/45; }
 }

@@ -75,15 +75,15 @@ export default function AnalysePage() {
   const lambda = markets?.lambda;
 
   return (
-    <div className="space-y-5 max-w-7xl">
+    <div className="mx-auto max-w-7xl space-y-4 sm:space-y-5">
       {/* Header match */}
       <div className="card">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">{event.competition}</span>
             {event.stage && <span className="text-xs text-gray-600">{event.stage}</span>}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-2 sm:justify-end">
             <span className={clsx("text-xs px-2 py-0.5 rounded-full", statusColor(event.status))}>{event.status}</span>
             <button onClick={runPrediction} disabled={predicting} className="btn-secondary flex items-center gap-2 text-sm">
               {predicting ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
@@ -93,13 +93,13 @@ export default function AnalysePage() {
         </div>
 
         {/* Score central */}
-        <div className="grid grid-cols-3 gap-4 items-center">
-          <div className={clsx("rounded-2xl p-4 text-center", pred?.prob_home && pred.prob_home > (pred?.prob_away ?? 0) ? "bg-green-900/30 border border-green-800/50" : "bg-gray-800/50")}>
-            <div className="text-xl font-bold text-white">{event.home_team}</div>
-            {pred && <div className="text-4xl font-black text-white mt-2">{(pred.prob_home! * 100).toFixed(0)}%</div>}
+        <div className="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-3 sm:items-center sm:gap-4">
+          <div className={clsx("rounded-2xl p-3 text-center sm:p-4", pred?.prob_home && pred.prob_home > (pred?.prob_away ?? 0) ? "bg-green-900/30 border border-green-800/50" : "bg-gray-800/50")}>
+            <div className="text-lg font-bold text-white sm:text-xl">{event.home_team}</div>
+            {pred && <div className="mt-1 text-3xl font-black text-white sm:mt-2 sm:text-4xl">{(pred.prob_home! * 100).toFixed(0)}%</div>}
             <div className="text-xs text-gray-500 mt-1">Victoire domicile</div>
           </div>
-          <div className="text-center">
+          <div className="rounded-2xl border border-gray-800 bg-gray-950/35 p-3 text-center sm:border-0 sm:bg-transparent sm:p-0">
             <div className="text-gray-400 text-sm font-semibold">VS</div>
             {pred && <div className="text-2xl font-black text-gray-300 mt-1">{(pred.prob_draw! * 100).toFixed(0)}%</div>}
             <div className="text-xs text-gray-500">Match nul</div>
@@ -111,9 +111,9 @@ export default function AnalysePage() {
               </div>
             )}
           </div>
-          <div className={clsx("rounded-2xl p-4 text-center", pred?.prob_away && pred.prob_away > (pred?.prob_home ?? 0) ? "bg-blue-900/30 border border-blue-800/50" : "bg-gray-800/50")}>
-            <div className="text-xl font-bold text-white">{event.away_team}</div>
-            {pred && <div className="text-4xl font-black text-white mt-2">{(pred.prob_away! * 100).toFixed(0)}%</div>}
+          <div className={clsx("rounded-2xl p-3 text-center sm:p-4", pred?.prob_away && pred.prob_away > (pred?.prob_home ?? 0) ? "bg-blue-900/30 border border-blue-800/50" : "bg-gray-800/50")}>
+            <div className="text-lg font-bold text-white sm:text-xl">{event.away_team}</div>
+            {pred && <div className="mt-1 text-3xl font-black text-white sm:mt-2 sm:text-4xl">{(pred.prob_away! * 100).toFixed(0)}%</div>}
             <div className="text-xs text-gray-500 mt-1">Victoire extérieur</div>
           </div>
         </div>
@@ -144,7 +144,12 @@ export default function AnalysePage() {
       )}
 
       {markets && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <ProgressiveSection
+          title="Marches detailles"
+          subtitle="Over/under, BTTS, mi-temps et scores exacts restent disponibles sans charger l'ecran."
+          icon={<BarChart2 size={16} className="text-orange-300" />}
+        >
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3 md:gap-4">
           {/* Over / Under */}
           {ou && (
             <div className="card">
@@ -222,6 +227,7 @@ export default function AnalysePage() {
             </div>
           )}
         </div>
+        </ProgressiveSection>
       )}
 
       {insightsLoading && (
@@ -254,7 +260,7 @@ export default function AnalysePage() {
           </h3>
           <div className="space-y-2">
             {pred.value_bets.map((vb: any, i: number) => (
-              <div key={i} className="bg-gray-800 rounded-xl p-4 flex items-center justify-between gap-4">
+              <div key={i} className="flex flex-col gap-3 rounded-xl bg-gray-800 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-white">{vb.label}</div>
                   <div className="text-xs text-gray-400 mt-0.5">
@@ -263,8 +269,8 @@ export default function AnalysePage() {
                     {" "}· {vb.bookmaker}
                   </div>
                 </div>
-                <div className="text-right shrink-0">
-                  <div className="text-2xl font-black text-white">Cote {Number(vb.odds).toFixed(2)}</div>
+                <div className="shrink-0 sm:text-right">
+                  <div className="text-xl font-black text-white sm:text-2xl">Cote {Number(vb.odds).toFixed(2)}</div>
                   <div className="text-xs text-green-400 font-bold">+{(vb.edge * 100).toFixed(1)}% edge</div>
                   <div className="text-xs text-yellow-400">Kelly {(vb.kelly_stake_pct * 100).toFixed(1)}%</div>
                 </div>
@@ -570,6 +576,38 @@ function MarketDirectionPill({ movement }: { movement: OddsMovement }) {
   );
 }
 
+function ProgressiveSection({
+  title,
+  subtitle,
+  icon,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  subtitle: string;
+  icon: ReactNode;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details className="card group" open={defaultOpen}>
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-2">
+            {icon}
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-semibold text-white">{title}</h3>
+            <p className="mt-1 line-clamp-2 text-xs text-gray-500">{subtitle}</p>
+          </div>
+        </div>
+        <ChevronDown size={17} className="shrink-0 text-gray-500 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="mt-4">{children}</div>
+    </details>
+  );
+}
+
 function formatOdds(value?: number) {
   if (!value) return "Cote modele";
   return `Cote ${value.toFixed(2)}`;
@@ -726,17 +764,25 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
           </div>
         ) : categoryOrder
           .filter((category) => grouped[category]?.length)
-          .map((category) => (
-            <div key={category}>
-              <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
-                {category}
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          .map((category, index) => (
+            <details key={category} className="group rounded-2xl border border-gray-800 bg-gray-950/35 p-3" open={index < 2}>
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                    {category}
+                  </div>
+                  <div className="text-[11px] text-gray-600">
+                    {grouped[category].length} selection(s)
+                  </div>
+                </div>
+                <ChevronDown size={15} className="text-gray-500 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                 {grouped[category].slice(0, category === "Joueurs" ? 8 : 6).map((suggestion) => (
                   <SuggestionCard key={suggestion.id} suggestion={suggestion} />
                 ))}
               </div>
-            </div>
+            </details>
           ))}
       </div>
 
@@ -1072,7 +1118,12 @@ function OddsHistoryPanel({ history }: { history: EventOddsHistoryResponse }) {
   const marketSummaries = history.markets || [];
 
   return (
-    <div className="card space-y-4 border border-indigo-900/50 bg-indigo-950/10">
+    <ProgressiveSection
+      title="Historique des cotes avancees"
+      subtitle={`${movements.length} mouvement(s), ${history.player_rows || 0} ligne(s) joueurs, ${history.rows_used || 0} ligne(s) analysees.`}
+      icon={<BarChart2 size={16} className="text-indigo-300" />}
+    >
+    <div className="space-y-4">
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
         <div>
           <h3 className="font-semibold text-white flex items-center gap-2">
@@ -1123,6 +1174,7 @@ function OddsHistoryPanel({ history }: { history: EventOddsHistoryResponse }) {
         ))}
       </div>
     </div>
+    </ProgressiveSection>
   );
 }
 
@@ -1165,7 +1217,7 @@ function BetCalculator({ event, pred }: { event: Event; pred: any }) {
   const [stake, setStake] = useState("");
   const [selection, setSelection] = useState("Victoire " + event.home_team);
   const [result, setResult] = useState<any>(null);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const selectionMap: Record<string, number> = {
     ["Victoire " + event.home_team]: pred.prob_home,
@@ -1312,19 +1364,18 @@ function ContextPanel({ context }: { context: MatchContext }) {
   const hasExternalSources = context.sources.length > 0;
 
   return (
-    <div className="card space-y-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="font-semibold text-white flex items-center gap-2">
-            <Sparkles size={16} className="text-cyan-400" />
-            {hasExternalSources ? "Contexte IA avec sources" : "Contexte IA - donnees internes"}
-          </h3>
-          <p className="text-sm text-gray-300 mt-2">{context.summary}</p>
+    <ProgressiveSection
+      title={hasExternalSources ? "Contexte IA avec sources" : "Contexte IA - donnees internes"}
+      subtitle={context.summary}
+      icon={<Sparkles size={16} className="text-cyan-400" />}
+    >
+      <div className="space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <p className="text-sm text-gray-300">{context.summary}</p>
+          <span className="shrink-0 text-xs text-gray-500">
+            {new Date(context.generated_at).toLocaleString("fr-FR")}
+          </span>
         </div>
-        <span className="text-xs text-gray-500 shrink-0">
-          {new Date(context.generated_at).toLocaleString("fr-FR")}
-        </span>
-      </div>
 
       {context.factors.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -1371,18 +1422,20 @@ function ContextPanel({ context }: { context: MatchContext }) {
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </ProgressiveSection>
   );
 }
 
 function PlayerInsightsPanel({ insights }: { insights: PlayerInsights }) {
   return (
-    <div className="card space-y-4">
+    <ProgressiveSection
+      title="Projections joueurs"
+      subtitle={`${insights.players.length} joueur(s), buteur, passe decisive, tirs cadres, carton et hors surface.`}
+      icon={<Users size={16} className="text-emerald-400" />}
+    >
+    <div className="space-y-4">
       <div>
-        <h3 className="font-semibold text-white flex items-center gap-2">
-          <Users size={16} className="text-emerald-400" />
-          Projections joueurs
-        </h3>
         <p className="text-xs text-gray-500 mt-1">{insights.methodology}</p>
         {insights.storage && (
           <p className="text-[11px] text-gray-600 mt-1">
@@ -1394,7 +1447,13 @@ function PlayerInsightsPanel({ insights }: { insights: PlayerInsights }) {
         )}
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="grid gap-2 md:hidden">
+        {insights.players.slice(0, 8).map((player) => (
+          <PlayerMobileCard key={player.player_id} player={player} />
+        ))}
+      </div>
+
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[1080px] text-sm">
           <thead>
             <tr className="border-b border-gray-800 text-left text-xs text-gray-500">
@@ -1465,6 +1524,41 @@ function PlayerInsightsPanel({ insights }: { insights: PlayerInsights }) {
         ))}
       </div>
     </div>
+    </ProgressiveSection>
+  );
+}
+
+function PlayerMobileCard({
+  player,
+}: {
+  player: PlayerInsights["players"][number];
+}) {
+  return (
+    <details className="rounded-2xl border border-gray-800 bg-gray-900/80 p-3">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-white">{player.player}</div>
+          <div className="text-xs text-gray-500">
+            {player.team} - {player.position}
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-sm font-black text-green-300">
+            {(player.anytime_scorer_probability * 100).toFixed(0)}%
+          </div>
+          <div className="text-[10px] text-gray-500">buteur</div>
+        </div>
+      </summary>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Stat label="But/Passe" value={`${(player.goal_or_assist_probability * 100).toFixed(1)}%`} />
+        <Stat label="Passe dec." value={`${(player.assist_probability * 100).toFixed(1)}%`} />
+        <Stat label="1+ tir cadre" value={`${(player.shot_on_target_probability * 100).toFixed(1)}%`} />
+        <Stat label="Carton" value={`${(player.card_probability * 100).toFixed(1)}%`} />
+      </div>
+      <div className="mt-2 text-[11px] text-gray-600">
+        xG/xA {player.expected_goals.toFixed(2)} / {player.expected_assists.toFixed(2)} - fiabilite {player.reliability}
+      </div>
+    </details>
   );
 }
 

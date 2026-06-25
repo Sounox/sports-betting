@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
+  ChevronDown,
   CheckCircle,
   Loader2,
   RefreshCw,
@@ -100,7 +101,7 @@ export default function RecommendationsPage() {
   }, []);
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <div className="mx-auto max-w-6xl space-y-4 sm:space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
@@ -119,9 +120,21 @@ export default function RecommendationsPage() {
         )}
       </div>
 
-      <DataFreshnessCard onAfterRefresh={load} />
+      <DataFreshnessCard compact onAfterRefresh={load} />
 
-      <div className="card grid grid-cols-1 md:grid-cols-5 gap-3">
+      <details className="card group">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-green-300">
+              Parametres de generation
+            </div>
+            <div className="mt-1 text-sm text-gray-300">
+              {riskLevel} · cote cible {targetOdds.toFixed(2)} · mise {money(stake)}
+            </div>
+          </div>
+          <ChevronToggle />
+        </summary>
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-5">
         <NumberField label="Bankroll" value={bankroll} onChange={setBankroll} />
         <NumberField label="Mise souhaitee" value={stake} onChange={setStake} />
         <NumberField label="Cote cible combine" value={targetOdds} onChange={setTargetOdds} step={0.1} />
@@ -153,6 +166,7 @@ export default function RecommendationsPage() {
           ))}
         </div>
       </div>
+      </details>
 
       {error && (
         <div className="card border-red-900 bg-red-950/30 text-red-300">
@@ -268,9 +282,17 @@ function NumberField({
   );
 }
 
+function ChevronToggle() {
+  return (
+    <span className="rounded-full border border-gray-800 bg-gray-950/60 p-2 text-gray-500 transition-transform group-open:rotate-180">
+      <ChevronDown size={16} />
+    </span>
+  );
+}
+
 function SummaryGrid({ data }: { data: RecommendationResponse }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-7 gap-3">
+    <div className="-mx-3 flex gap-3 overflow-x-auto px-3 scrollbar-none md:mx-0 md:grid md:grid-cols-7 md:px-0">
       <Metric label="Matchs analyses" value={String(data.summary.upcoming_events)} />
       <Metric label="Value bets vues" value={String(data.summary.value_bets_considered)} />
       <Metric label="Simples retenus" value={String(data.summary.recommended_singles)} />
@@ -408,22 +430,25 @@ function MarketRadarPanel({
         <div className="space-y-5">
           {order
             .filter((category) => grouped[category]?.length)
-            .map((category) => (
-              <div key={category}>
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-xs font-bold uppercase tracking-wide text-emerald-300">
-                    {category}
+            .map((category, index) => (
+              <details key={category} className="group rounded-2xl border border-gray-800 bg-gray-950/35 p-3" open={index === 0}>
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wide text-emerald-300">
+                      {category}
+                    </div>
+                    <div className="text-[11px] text-gray-600">
+                      {grouped[category].length} signal(aux)
+                    </div>
                   </div>
-                  <div className="text-[11px] text-gray-600">
-                    {grouped[category].length} signal(aux)
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  <ChevronDown size={15} className="text-gray-500 transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                   {grouped[category].slice(0, 6).map((suggestion) => (
                     <RadarCard key={`${suggestion.event_id}-${suggestion.category}-${suggestion.label}`} suggestion={suggestion} />
                   ))}
                 </div>
-              </div>
+              </details>
             ))}
 
           <div className="rounded-xl border border-yellow-900/60 bg-yellow-950/20 p-3 space-y-1">
@@ -731,7 +756,7 @@ function StakeEvidenceLine({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="card">
+    <div className="card min-w-[132px] md:min-w-0">
       <div className="text-xl font-black text-white">{value}</div>
       <div className="text-xs text-gray-500 mt-0.5">{label}</div>
     </div>
@@ -759,6 +784,8 @@ function SectionTitle({
 }
 
 function SingleCard({ single }: { single: RecommendationSingle }) {
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <div className="card hover:border-gray-700 transition-colors">
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
@@ -791,7 +818,7 @@ function SingleCard({ single }: { single: RecommendationSingle }) {
             {single.bookmaker} - {new Date(single.scheduled_at).toLocaleString("fr-FR")}
           </div>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:min-w-[430px]">
+        <div className="grid grid-cols-2 gap-2 md:min-w-[430px] md:grid-cols-4">
           <Mini label="Cote" value={single.odds.toFixed(2)} />
           <Mini label="Modele" value={pct(single.model_prob)} />
           <Mini label="Edge" value={`+${pct(single.edge)}`} good />
@@ -799,20 +826,33 @@ function SingleCard({ single }: { single: RecommendationSingle }) {
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
-        {single.reasons.slice(0, 3).map((reason, index) => (
-          <div key={index} className="text-xs text-green-200/70 bg-green-950/20 border border-green-900/40 rounded-lg p-2">
-            {reason}
-          </div>
-        ))}
-        {single.warnings.slice(0, 3).map((warning, index) => (
-          <div key={index} className="text-xs text-yellow-200/70 bg-yellow-950/20 border border-yellow-900/40 rounded-lg p-2">
-            {warning}
-          </div>
-        ))}
-      </div>
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-gray-800 bg-gray-950/40 px-3 py-2 text-xs font-semibold text-gray-300 transition-colors hover:border-gray-700 hover:text-white"
+      >
+        {expanded ? "Masquer l'analyse" : "Voir l'analyse"}
+        <ChevronDown size={14} className={clsx("transition-transform", expanded && "rotate-180")} />
+      </button>
 
-      <StakeAdjustmentJournal signal={single.stake_adjustment} />
+      {expanded && (
+        <>
+          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+            {single.reasons.slice(0, 3).map((reason, index) => (
+              <div key={index} className="text-xs text-green-200/70 bg-green-950/20 border border-green-900/40 rounded-lg p-2">
+                {reason}
+              </div>
+            ))}
+            {single.warnings.slice(0, 3).map((warning, index) => (
+              <div key={index} className="text-xs text-yellow-200/70 bg-yellow-950/20 border border-yellow-900/40 rounded-lg p-2">
+                {warning}
+              </div>
+            ))}
+          </div>
+
+          <StakeAdjustmentJournal signal={single.stake_adjustment} />
+        </>
+      )}
     </div>
   );
 }

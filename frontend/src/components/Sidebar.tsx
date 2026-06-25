@@ -23,7 +23,7 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-56 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
+    <aside className="hidden w-56 shrink-0 bg-gray-900 border-r border-gray-800 lg:flex lg:flex-col">
       {/* Logo */}
       <div className="p-4 border-b border-gray-800">
         <div className="flex items-center gap-2">
@@ -64,5 +64,34 @@ export function Sidebar() {
         </div>
       </div>
     </aside>
+  );
+}
+
+export function MobileDock() {
+  const pathname = usePathname();
+
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-gray-800/90 bg-gray-950/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2 shadow-2xl backdrop-blur lg:hidden">
+      <div className="flex gap-1 overflow-x-auto scrollbar-none">
+        {NAV.map(({ href, label, icon: Icon }) => {
+          const active = pathname === href || (href !== "/" && pathname.startsWith(href));
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={clsx(
+                "flex min-w-[74px] flex-col items-center justify-center gap-1 rounded-2xl px-2 py-2 text-[10px] font-semibold transition-colors",
+                active
+                  ? "bg-green-500/15 text-green-300 ring-1 ring-green-500/30"
+                  : "text-gray-500 hover:bg-gray-900 hover:text-gray-300",
+              )}
+            >
+              <Icon size={17} />
+              <span className="max-w-[68px] truncate">{label}</span>
+            </Link>
+          );
+        })}
+      </div>
+    </nav>
   );
 }

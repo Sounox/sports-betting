@@ -82,7 +82,7 @@ export function AiChat({ eventId, matchLabel }: Props) {
       <button
         onClick={() => setOpen(x => !x)}
         className={clsx(
-          "fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full shadow-xl flex items-center justify-center transition-all",
+          "fixed bottom-24 right-4 z-50 flex h-12 w-12 items-center justify-center rounded-full shadow-xl transition-all sm:bottom-6 sm:right-6 sm:h-14 sm:w-14",
           open ? "bg-gray-700 hover:bg-gray-600" : "bg-green-600 hover:bg-green-500"
         )}
       >
@@ -91,7 +91,7 @@ export function AiChat({ eventId, matchLabel }: Props) {
 
       {/* Panel chat */}
       {open && (
-        <div className="fixed bottom-24 right-6 z-50 w-96 max-w-[calc(100vw-2rem)] bg-gray-900 border border-gray-700 rounded-2xl shadow-2xl flex flex-col"
+        <div className="fixed inset-x-3 bottom-40 z-50 flex max-h-[62vh] flex-col rounded-2xl border border-gray-700 bg-gray-900 shadow-2xl sm:inset-x-auto sm:bottom-24 sm:right-6 sm:h-[480px] sm:w-96 sm:max-w-[calc(100vw-2rem)]"
           style={{ height: "480px" }}>
 
           {/* Header */}
