@@ -3,6 +3,7 @@ import type {
   CalibrationSignal,
   Event,
   MarketSignal,
+  StakeAdjustmentSignal,
   ValueBet,
 } from "@/lib/api";
 import { getMatchBetBuilder } from "@/lib/server/bet-builder-cloud";
@@ -10,6 +11,7 @@ import { getUpcomingMatches } from "@/lib/server/football-cloud";
 import {
   getEventOddsHistory,
   getRecommendationCalibrationProfile,
+  type RecommendationClvSignal,
   type RecommendationCalibrationSignal,
 } from "@/lib/server/history-cloud";
 
@@ -42,6 +44,7 @@ interface CandidateBet extends ValueBet {
   decision: "consider" | "avoid";
   market_signal?: MarketSignal;
   calibration_signal?: CalibrationSignal;
+  stake_adjustment?: StakeAdjustmentSignal;
 }
 
 interface OddsMovementSignal {
@@ -74,6 +77,8 @@ interface ParlayResult extends ParlayCore {
 interface CalibrationProfile {
   global: Map<number, RecommendationCalibrationSignal>;
   market: Map<string, RecommendationCalibrationSignal>;
+  clvGlobal?: RecommendationClvSignal;
+  clvMarket: Map<string, RecommendationClvSignal>;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -302,6 +307,8 @@ async function loadCalibrationProfile(): Promise<CalibrationProfile> {
     const profile = await getRecommendationCalibrationProfile();
     const global = new Map<number, RecommendationCalibrationSignal>();
     const market = new Map<string, RecommendationCalibrationSignal>();
+    const clvMarket = new Map<string, RecommendationClvSignal>();
+    let clvGlobal: RecommendationClvSignal | undefined;
     for (const bucket of profile.buckets || []) {
       if (bucket.scope === "global") {
         global.set(bucket.bucket, bucket);
@@ -309,9 +316,16 @@ async function loadCalibrationProfile(): Promise<CalibrationProfile> {
         market.set(calibrationKey(bucket.market, bucket.bucket), bucket);
       }
     }
-    return { global, market };
+    for (const signal of profile.clv || []) {
+      if (signal.scope === "global") {
+        clvGlobal = signal;
+      } else if (signal.market) {
+        clvMarket.set(normalize(signal.market), signal);
+      }
+    }
+    return { global, market, clvGlobal, clvMarket };
   } catch {
-    return { global: new Map(), market: new Map() };
+    return { global: new Map(), market: new Map(), clvMarket: new Map() };
   }
 }
 
@@ -356,6 +370,109 @@ function hasAdverseCalibration(candidate: CandidateBet) {
     candidate.calibration_signal?.verdict === "overconfident" &&
     candidate.calibration_signal.signal_strength !== "low"
   );
+}
+
+function chooseClvSignal(candidate: CandidateBet, profile: CalibrationProfile) {
+  const marketSignal = profile.clvMarket.get(normalize(candidate.market));
+  if (marketSignal && marketSignal.sample_size >= 8) return marketSignal;
+  return profile.clvGlobal || null;
+}
+
+function marketStakeFactor(signal?: MarketSignal) {
+  if (!signal || signal.verdict === "neutral" || signal.verdict === "insufficient") {
+    return 1;
+  }
+  if (signal.verdict === "favorable") {
+    return signal.signal_strength === "high" ? 1.03 : 1.01;
+  }
+  if (signal.signal_strength === "high") return 0.55;
+  if (signal.signal_strength === "medium") return 0.72;
+  return 0.9;
+}
+
+function calibrationStakeFactor(signal?: CalibrationSignal) {
+  if (!signal || signal.verdict === "insufficient") return 1;
+  if (signal.verdict === "overconfident") {
+    if (signal.signal_strength === "high") return 0.55;
+    if (signal.signal_strength === "medium") return 0.72;
+    return 0.9;
+  }
+  if (signal.verdict === "underconfident") return 1.03;
+  return 1;
+}
+
+function applyStakeDiscipline(
+  candidate: CandidateBet,
+  profile: CalibrationProfile,
+) {
+  const clvSignal = chooseClvSignal(candidate, profile);
+  const factors = [
+    calibrationStakeFactor(candidate.calibration_signal),
+    clvSignal?.stake_factor ?? 1,
+    marketStakeFactor(candidate.market_signal),
+  ];
+  const rawFactor = factors.reduce((product, factor) => product * factor, 1);
+  const stakeFactor = clamp(rawFactor, 0.35, 1.05);
+  const originalStake = candidate.recommended_stake;
+  const adjustedStake = Number((originalStake * stakeFactor).toFixed(2));
+  if (Math.abs(stakeFactor - 1) < 0.01) {
+    return {
+      ...candidate,
+      stake_adjustment: {
+        stake_factor: 1,
+        original_stake: originalStake,
+        adjusted_stake: originalStake,
+        verdict: "normal",
+        reasons: ["Mise conservee: pas de signal historique assez fort."],
+        calibration_signal: candidate.calibration_signal,
+        clv_signal: clvSignal || undefined,
+        market_signal: candidate.market_signal,
+      } satisfies StakeAdjustmentSignal,
+    };
+  }
+
+  const reasons: string[] = [];
+  if (candidate.calibration_signal?.verdict === "overconfident") {
+    reasons.push(candidate.calibration_signal.reason);
+  }
+  if (clvSignal?.verdict === "negative") {
+    reasons.push(clvSignal.reason);
+  }
+  if (candidate.market_signal?.verdict === "unfavorable") {
+    reasons.push(candidate.market_signal.reason);
+  }
+  if (stakeFactor > 1) {
+    reasons.push("Bonus de mise plafonne: les signaux historiques sont favorables, mais la prudence reste prioritaire.");
+  }
+  const verdict = stakeFactor < 1 ? "reduced" : "capped_bonus";
+  const warning =
+    stakeFactor < 1
+      ? `Mise reduite automatiquement (${Math.round(stakeFactor * 100)}% de la mise initiale) par discipline bankroll.`
+      : null;
+  const reason =
+    stakeFactor > 1
+      ? `Mise legerement relevee (${Math.round(stakeFactor * 100)}%) car les signaux historiques sont favorables.`
+      : null;
+
+  return {
+    ...candidate,
+    recommended_stake: adjustedStake,
+    potential_return: Number((adjustedStake * candidate.odds).toFixed(2)),
+    warnings: warning ? [...candidate.warnings, warning] : candidate.warnings,
+    reasons: reason ? [...candidate.reasons, reason] : candidate.reasons,
+    stake_adjustment: {
+      stake_factor: Number(stakeFactor.toFixed(3)),
+      original_stake: originalStake,
+      adjusted_stake: adjustedStake,
+      verdict,
+      reasons: reasons.length
+        ? reasons
+        : ["Ajustement prudent de mise applique par le moteur bankroll."],
+      calibration_signal: candidate.calibration_signal,
+      clv_signal: clvSignal || undefined,
+      market_signal: candidate.market_signal,
+    } satisfies StakeAdjustmentSignal,
+  };
 }
 
 function varianceRisk(bet: ValueBet): RiskLevel {
@@ -511,8 +628,15 @@ function buildParlay(
   const selected = best as ParlayCore | null;
   if (!selected) return null;
 
+  const parlayStakeFactor = Math.min(
+    ...selected.legs.map((leg) => leg.stake_adjustment?.stake_factor || 1),
+  );
   const recommendedStake = Number(
-    clamp(input.bankroll * config.parlayStakePct, 0, input.stake).toFixed(2),
+    clamp(
+      input.bankroll * config.parlayStakePct * parlayStakeFactor,
+      0,
+      input.stake,
+    ).toFixed(2),
   );
   return {
     ...selected,
@@ -523,6 +647,11 @@ function buildParlay(
       "Combiné probabiliste: une seule selection perdante fait perdre le ticket.",
       "Mise volontairement faible via bankroll prudente.",
       "Ne pas augmenter la mise apres une perte.",
+      ...(parlayStakeFactor < 0.99
+        ? [
+            `Mise combine reduite (${Math.round(parlayStakeFactor * 100)}%) selon le signal historique le plus fragile.`,
+          ]
+        : []),
     ],
   };
 }
@@ -662,10 +791,13 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
   ]);
   const allCandidates = events.flatMap((event) =>
     (event.prediction?.value_bets || []).map((bet) =>
-      applyCalibrationSignal(
-        applyMarketSignal(
-          buildCandidate(event, bet, { bankroll, stake }, risk),
-          movementsByEvent.get(event.id) || [],
+      applyStakeDiscipline(
+        applyCalibrationSignal(
+          applyMarketSignal(
+            buildCandidate(event, bet, { bankroll, stake }, risk),
+            movementsByEvent.get(event.id) || [],
+          ),
+          calibrationProfile,
         ),
         calibrationProfile,
       ),
@@ -712,6 +844,9 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
           candidate.calibration_signal &&
           candidate.calibration_signal.verdict !== "insufficient",
       ).length,
+      stake_adjusted: allCandidates.filter(
+        (candidate) => candidate.stake_adjustment?.verdict === "reduced",
+      ).length,
     },
     singles: singles.map((candidate) => ({
       event_id: candidate.event_id,
@@ -736,6 +871,7 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
       warnings: candidate.warnings,
       market_signal: candidate.market_signal,
       calibration_signal: candidate.calibration_signal,
+      stake_adjustment: candidate.stake_adjustment,
     })),
     parlays: parlay
       ? [
@@ -754,6 +890,7 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
               score: leg.score,
               market_signal: leg.market_signal,
               calibration_signal: leg.calibration_signal,
+              stake_adjustment: leg.stake_adjustment,
             })),
           },
         ]

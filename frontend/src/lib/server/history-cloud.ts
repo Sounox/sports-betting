@@ -183,6 +183,18 @@ export interface RecommendationCalibrationSignal {
   reason: string;
 }
 
+export interface RecommendationClvSignal {
+  scope: "market" | "global";
+  market?: string | null;
+  sample_size: number;
+  avg_clv: number | null;
+  positive_clv_rate: number | null;
+  verdict: "positive" | "negative" | "neutral" | "insufficient";
+  signal_strength: "low" | "medium" | "high";
+  stake_factor: number;
+  reason: string;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
   event_id INTEGER PRIMARY KEY,
@@ -1424,10 +1436,89 @@ function calibrationSignalFromStats(input: {
   };
 }
 
+function clvSignalFromStats(input: {
+  scope: "market" | "global";
+  market?: string | null;
+  count: number;
+  avgClv: number | null;
+  positiveClv: number;
+}): RecommendationClvSignal {
+  const positiveRate = input.count ? input.positiveClv / input.count : null;
+  const avgClv = input.avgClv == null ? null : Number(input.avgClv);
+  const weakPositiveRate = positiveRate != null && positiveRate < 0.35;
+  const poorPositiveRate = positiveRate != null && positiveRate < 0.25;
+  const weakAvg = avgClv != null && avgClv < -0.005;
+  const poorAvg = avgClv != null && avgClv < -0.015;
+  const goodAvg = avgClv != null && avgClv > 0.008;
+  const goodPositiveRate = positiveRate != null && positiveRate > 0.52;
+
+  const verdict =
+    input.count < 8
+      ? "insufficient"
+      : poorAvg || poorPositiveRate
+        ? "negative"
+        : weakAvg || weakPositiveRate
+          ? "negative"
+          : goodAvg && goodPositiveRate
+            ? "positive"
+            : "neutral";
+  const signalStrength =
+    input.count >= 20 && (poorAvg || poorPositiveRate)
+      ? "high"
+      : input.count >= 8 && (weakAvg || weakPositiveRate)
+        ? "medium"
+        : "low";
+  const stakeFactor =
+    verdict === "negative"
+      ? signalStrength === "high"
+        ? 0.62
+        : signalStrength === "medium"
+          ? 0.78
+          : 0.9
+      : verdict === "positive"
+        ? 1.04
+        : 1;
+  const scopeLabel =
+    input.scope === "market" && input.market
+      ? `marche ${marketDisplayLabel(input.market)}`
+      : "tous marches";
+  const clvLabel = avgClv == null ? "n/a" : `${(avgClv * 100).toFixed(2)}%`;
+  const positiveLabel =
+    positiveRate == null ? "n/a" : `${(positiveRate * 100).toFixed(1)}%`;
+
+  let reason = `CLV ${scopeLabel}: ${input.count} cas, CLV moyenne ${clvLabel}, CLV positive ${positiveLabel}.`;
+  if (verdict === "negative") {
+    reason += " Mise reduite: l'historique de cloture est defavorable.";
+  } else if (verdict === "positive") {
+    reason += " Signal legerement favorable, bonus plafonne par prudence.";
+  } else if (verdict === "insufficient") {
+    reason += " Historique CLV trop court: pas d'ajustement fort.";
+  } else {
+    reason += " Signal CLV neutre.";
+  }
+
+  return {
+    scope: input.scope,
+    market: input.market ?? null,
+    sample_size: input.count,
+    avg_clv: avgClv == null ? null : Number(avgClv.toFixed(4)),
+    positive_clv_rate:
+      positiveRate == null ? null : Number(positiveRate.toFixed(4)),
+    verdict,
+    signal_strength: signalStrength,
+    stake_factor: stakeFactor,
+    reason,
+  };
+}
+
 export async function getRecommendationCalibrationProfile() {
   const db = getDb();
   if (!db) {
-    return { ...unavailableStatus(), buckets: [] as RecommendationCalibrationSignal[] };
+    return {
+      ...unavailableStatus(),
+      buckets: [] as RecommendationCalibrationSignal[],
+      clv: [] as RecommendationClvSignal[],
+    };
   }
   await ensureSchema(db);
 
@@ -1490,11 +1581,63 @@ export async function getRecommendationCalibrationProfile() {
     );
   }
 
+  const clvRows = await db
+    .prepare(
+      `SELECT
+         market,
+         COUNT(*) AS count,
+         AVG(clv) AS avg_clv,
+         SUM(CASE WHEN clv > 0 THEN 1 ELSE 0 END) AS positive_clv
+       FROM backtest_results
+       WHERE source = 'value_bet'
+         AND clv IS NOT NULL
+       GROUP BY market`,
+    )
+    .all<{
+      market: string | null;
+      count: number;
+      avg_clv: number | null;
+      positive_clv: number;
+    }>();
+
+  const clv: RecommendationClvSignal[] = [];
+  const globalClv = clvRows.results.reduce(
+    (acc, row) => {
+      acc.count += Number(row.count || 0);
+      acc.weightedClv += Number(row.avg_clv || 0) * Number(row.count || 0);
+      acc.positiveClv += Number(row.positive_clv || 0);
+      return acc;
+    },
+    { count: 0, weightedClv: 0, positiveClv: 0 },
+  );
+  if (globalClv.count > 0) {
+    clv.push(
+      clvSignalFromStats({
+        scope: "global",
+        count: globalClv.count,
+        avgClv: globalClv.weightedClv / globalClv.count,
+        positiveClv: globalClv.positiveClv,
+      }),
+    );
+  }
+  for (const row of clvRows.results) {
+    clv.push(
+      clvSignalFromStats({
+        scope: "market",
+        market: row.market || "unknown",
+        count: Number(row.count || 0),
+        avgClv: row.avg_clv,
+        positiveClv: Number(row.positive_clv || 0),
+      }),
+    );
+  }
+
   return {
     enabled: true,
     generated_at: new Date().toISOString(),
     samples: rows.results.length,
     buckets,
+    clv,
     note:
       "Ajustements conservateurs: les signaux de calibration modifient le score, mais ne remplacent pas la probabilite modele.",
   };

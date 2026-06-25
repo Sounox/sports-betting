@@ -218,6 +218,27 @@ export interface CalibrationSignal {
   reason: string;
 }
 
+export interface StakeAdjustmentSignal {
+  stake_factor: number;
+  original_stake: number;
+  adjusted_stake: number;
+  verdict: "normal" | "reduced" | "capped_bonus";
+  reasons: string[];
+  calibration_signal?: CalibrationSignal;
+  clv_signal?: {
+    scope: "market" | "global";
+    market?: string | null;
+    sample_size: number;
+    avg_clv: number | null;
+    positive_clv_rate: number | null;
+    verdict: "positive" | "negative" | "neutral" | "insufficient";
+    signal_strength: "low" | "medium" | "high";
+    stake_factor: number;
+    reason: string;
+  };
+  market_signal?: MarketSignal;
+}
+
 export interface MatchBetBuilder {
   event_id: number;
   generated_at: string;
@@ -365,6 +386,7 @@ export interface RecommendationSingle {
   warnings: string[];
   market_signal?: MarketSignal;
   calibration_signal?: CalibrationSignal;
+  stake_adjustment?: StakeAdjustmentSignal;
 }
 
 export interface RecommendationParlay {
@@ -381,6 +403,7 @@ export interface RecommendationParlay {
     score: number;
     market_signal?: MarketSignal;
     calibration_signal?: CalibrationSignal;
+    stake_adjustment?: StakeAdjustmentSignal;
   }>;
   total_odds: number;
   theoretical_probability: number;
@@ -401,6 +424,7 @@ export interface RecommendationResponse {
     avoided_events: number;
     parlay_available: boolean;
     calibration_adjusted?: number;
+    stake_adjusted?: number;
   };
   singles: RecommendationSingle[];
   parlays: RecommendationParlay[];

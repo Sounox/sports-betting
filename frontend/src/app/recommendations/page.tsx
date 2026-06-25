@@ -23,6 +23,7 @@ import {
   type RecommendationParlay,
   type RecommendationResponse,
   type RecommendationSingle,
+  type StakeAdjustmentSignal,
 } from "@/lib/api";
 
 const RISKS = [
@@ -260,12 +261,13 @@ function NumberField({
 
 function SummaryGrid({ data }: { data: RecommendationResponse }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-7 gap-3">
       <Metric label="Matchs analyses" value={String(data.summary.upcoming_events)} />
       <Metric label="Value bets vues" value={String(data.summary.value_bets_considered)} />
       <Metric label="Simples retenus" value={String(data.summary.recommended_singles)} />
       <Metric label="Combine" value={data.summary.parlay_available ? "Oui" : "Non"} />
       <Metric label="Calibration" value={String(data.summary.calibration_adjusted || 0)} />
+      <Metric label="Mises reduites" value={String(data.summary.stake_adjusted || 0)} />
       <Metric label="Risque" value={data.filters.risk_level} />
     </div>
   );
@@ -485,6 +487,27 @@ function CalibrationSignalBadge({ signal }: { signal: CalibrationSignal }) {
   );
 }
 
+function StakeSignalBadge({ signal }: { signal: StakeAdjustmentSignal }) {
+  if (signal.verdict === "normal") return null;
+  const label =
+    signal.verdict === "reduced"
+      ? `mise ${Math.round(signal.stake_factor * 100)}%`
+      : `mise ${Math.round(signal.stake_factor * 100)}% cap`;
+  return (
+    <span
+      title={signal.reasons.join(" ")}
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+        signal.verdict === "reduced"
+          ? "bg-yellow-900/45 text-yellow-300"
+          : "bg-cyan-900/40 text-cyan-300",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="card">
@@ -534,6 +557,9 @@ function SingleCard({ single }: { single: RecommendationSingle }) {
             )}
             {single.calibration_signal && (
               <CalibrationSignalBadge signal={single.calibration_signal} />
+            )}
+            {single.stake_adjustment && (
+              <StakeSignalBadge signal={single.stake_adjustment} />
             )}
           </div>
           <Link href={`/analyse/${single.event_id}`} className="font-bold text-white mt-3 block hover:text-green-300">
@@ -595,6 +621,11 @@ function ParlayCard({ parlay }: { parlay: RecommendationParlay }) {
             {leg.calibration_signal && (
               <div className="mt-2">
                 <CalibrationSignalBadge signal={leg.calibration_signal} />
+              </div>
+            )}
+            {leg.stake_adjustment && (
+              <div className="mt-2">
+                <StakeSignalBadge signal={leg.stake_adjustment} />
               </div>
             )}
           </div>
