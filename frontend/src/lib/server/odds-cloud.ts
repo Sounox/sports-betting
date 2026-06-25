@@ -65,12 +65,46 @@ interface CandidateOdd {
   updatedAt: string;
 }
 
+export const FRENCH_BOOKMAKER_PRIORITY = [
+  "Winamax (FR)",
+  "Betclic (FR)",
+  "Unibet (FR)",
+  "PMU (FR)",
+  "Parions Sport",
+  "ParionsSport",
+];
+
 function normalize(value: string) {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
+}
+
+export function bookmakerPreferenceRank(bookmaker?: string | null) {
+  if (!bookmaker) return 999;
+  const normalized = normalize(bookmaker);
+  const index = FRENCH_BOOKMAKER_PRIORITY.findIndex((candidate) =>
+    normalized.includes(normalize(candidate)),
+  );
+  if (index >= 0) return index;
+  if (normalized.includes("fr")) return 20;
+  return 100;
+}
+
+export function isFrenchBookmaker(bookmaker?: string | null) {
+  return bookmakerPreferenceRank(bookmaker) < 100;
+}
+
+function preferBookmakerOdd<T extends { price: number; bookmakerTitle?: string; bookmaker?: string }>(
+  left: T,
+  right: T,
+) {
+  const leftRank = bookmakerPreferenceRank(left.bookmakerTitle || left.bookmaker);
+  const rightRank = bookmakerPreferenceRank(right.bookmakerTitle || right.bookmaker);
+  if (leftRank !== rightRank) return leftRank < rightRank ? left : right;
+  return left.price >= right.price ? left : right;
 }
 
 function median(values: number[]) {
@@ -239,7 +273,7 @@ function selectBestOdds(candidates: CandidateOdd[]) {
         entry.overround <= 1.25,
     );
     const pool = valid.length ? valid : entries;
-    best.push(pool.reduce((a, b) => (a.price >= b.price ? a : b)));
+    best.push(pool.reduce((a, b) => preferBookmakerOdd(a, b)));
   }
   return best;
 }

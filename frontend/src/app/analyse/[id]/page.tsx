@@ -579,6 +579,11 @@ function displayedOdds(suggestion: BetSuggestion) {
   return suggestion.offered_odds || suggestion.fair_odds;
 }
 
+function isFrenchBookmakerName(bookmaker?: string) {
+  if (!bookmaker) return false;
+  return /(winamax|betclic|unibet \(fr\)|pmu|parions)/i.test(bookmaker);
+}
+
 function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
   const grouped = builder.suggestions.reduce<Record<string, BetSuggestion[]>>(
     (acc, suggestion) => {
@@ -613,7 +618,7 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
             Propositions de paris enrichies
           </h3>
           <p className="text-xs text-gray-500 mt-1">
-            Cotes bookmaker quand disponibles, sinon cote estimee par le modele.
+            Priorite aux cotes francaises quand disponibles; sinon fallback bookmaker global ou cote modele.
           </p>
         </div>
         <div className="text-xs text-gray-400 md:text-right">
@@ -688,6 +693,7 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
         <Stat
           label={playable ? suggestion.bookmaker || "Book" : "Estimation"}
           value={formatOdds(playable ? suggestion.offered_odds : displayedOdds(suggestion))}
+          highlight={playable && isFrenchBookmakerName(suggestion.bookmaker) ? "green" : undefined}
         />
         <Stat
           label="Edge"
@@ -720,7 +726,9 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
           )}
         >
           {suggestion.data_level === "bookmaker"
-            ? "cote bookmaker"
+            ? isFrenchBookmakerName(suggestion.bookmaker)
+              ? "cote FR"
+              : "fallback book"
             : suggestion.data_level === "proxy"
               ? "proxy experimental"
               : "modele"}

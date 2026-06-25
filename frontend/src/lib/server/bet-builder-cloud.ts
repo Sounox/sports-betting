@@ -14,8 +14,11 @@ import { getPlayerInsights } from "@/lib/server/player-cloud";
 import {
   EVENT_CORE_SOCCER_MARKETS,
   EVENT_PLAYER_SOCCER_MARKETS,
+  FRENCH_BOOKMAKER_PRIORITY,
   getWorldCupEventOdds,
   getWorldCupOdds,
+  bookmakerPreferenceRank,
+  isFrenchBookmaker,
   matchOddsEvent,
   serializeOdds,
 } from "@/lib/server/odds-cloud";
@@ -134,7 +137,12 @@ function bestOutcome(
     if (snapshot.market !== market) continue;
     for (const selection of snapshot.selections) {
       if (!predicate(selection)) continue;
-      if (!best || selection.price > best.price) {
+      if (
+        !best ||
+        bookmakerPreferenceRank(snapshot.bookmaker) < bookmakerPreferenceRank(best.bookmaker) ||
+        (bookmakerPreferenceRank(snapshot.bookmaker) === bookmakerPreferenceRank(best.bookmaker) &&
+          selection.price > best.price)
+      ) {
         best = { ...selection, bookmaker: snapshot.bookmaker, market };
       }
     }
@@ -262,7 +270,14 @@ function appendBookmakerOnlyPlayerProps(
       }
 
       const current = best.get(key);
-      if (!current || selection.price > current.selection.price) {
+      if (
+        !current ||
+        bookmakerPreferenceRank(snapshot.bookmaker) <
+          bookmakerPreferenceRank(current.snapshot.bookmaker) ||
+        (bookmakerPreferenceRank(snapshot.bookmaker) ===
+          bookmakerPreferenceRank(current.snapshot.bookmaker) &&
+          selection.price > current.selection.price)
+      ) {
         best.set(key, {
           snapshot,
           selection,
@@ -686,9 +701,15 @@ function suggestionQualityRank(suggestion: BetSuggestion) {
   const edge = suggestion.edge == null ? -4 : suggestion.edge * 120;
   const odds = suggestion.offered_odds ? Math.min(20, suggestion.offered_odds) : 0;
   const source = suggestion.data_level === "bookmaker" ? 12 : suggestion.data_level === "model" ? 3 : -8;
+  const bookmakerPreference =
+    suggestion.bookmaker && isFrenchBookmaker(suggestion.bookmaker)
+      ? 18 - bookmakerPreferenceRank(suggestion.bookmaker) * 2
+      : suggestion.bookmaker
+        ? -4
+        : 0;
   const market = suggestion.market_signal?.score_adjustment || 0;
   const avoid = suggestion.playability === "eviter" ? -18 : suggestion.playability === "jouable" ? 8 : 0;
-  return reliability + edge + odds + source + market + avoid;
+  return reliability + edge + odds + source + bookmakerPreference + market + avoid;
 }
 
 function dedupeSuggestions(suggestions: BetSuggestion[]) {
@@ -1785,14 +1806,11 @@ export async function getMatchBetBuilder(
     bookmaker_markets: snapshots.length,
     model_markets: suggestions.filter((suggestion) => suggestion.source === "model").length,
     preferred_bookmakers: [
-      "Winamax",
-      "Unibet",
-      "Betfair",
-      "Pinnacle",
-      "PMU",
-      "Betclic",
+      ...FRENCH_BOOKMAKER_PRIORITY,
+      "Fallback: meilleure cote globale si aucune cote FR n'est disponible",
     ],
     warnings: [
+      "Priorite d'affichage: Winamax FR, Betclic FR, Unibet FR, PMU FR, puis fallback global.",
       "Les marchés joueurs et scénarios sont des projections modèle si aucune cote bookmaker n'est disponible.",
       "Les cotes joueurs bookmaker viennent des marchés événement disponibles et peuvent varier selon les books.",
       "Aucun pari n'est sûr: les propositions sont probabilistes.",
