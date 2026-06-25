@@ -249,6 +249,17 @@ function appendBookmakerOnlyPlayerProps(
         market = "Carton joueur";
         label = `${player} recoit un carton`;
       }
+      if (
+        suggestions.some(
+          (suggestion) =>
+            normalize(suggestion.label) === normalize(label) ||
+            (sameEntity(suggestion.selection, player) &&
+              suggestion.market === market &&
+              pointMatches(selection.point, extractLine(suggestion.label))),
+        )
+      ) {
+        continue;
+      }
 
       const current = best.get(key);
       if (!current || selection.price > current.selection.price) {
@@ -1226,14 +1237,31 @@ function buildSuggestions(
 
   for (const player of (playerInsights?.players || []).slice(0, 10)) {
     const goalOrAssistProbability =
+      player.goal_or_assist_probability ||
       1 -
-      (1 - player.anytime_scorer_probability) *
-        (1 - player.assist_probability);
+        (1 - player.anytime_scorer_probability) *
+          (1 - player.assist_probability);
     const shotOnTargetLambda =
       player.expected_goals *
       (player.position.toLowerCase().includes("midfield") ? 2.1 : 2.7);
-    const shotOnTargetProbability = poissonAtLeastOne(shotOnTargetLambda);
-    const twoShotsOnTargetProbability = poissonAtLeastTwo(shotOnTargetLambda);
+    const shotOnTargetProbability =
+      player.shot_on_target_probability || poissonAtLeastOne(shotOnTargetLambda);
+    const twoShotsOnTargetProbability =
+      player.two_shots_on_target_probability || poissonAtLeastTwo(shotOnTargetLambda);
+    const playerCardProbability =
+      player.card_probability || cardProbability(player.position, player.reliability);
+    const playerTeamLambda = sameEntity(player.team, event.home_team)
+      ? lambdaHome
+      : lambdaAway;
+    const teamFirstGoalProbability = sameEntity(player.team, event.home_team)
+      ? firstGoalHome
+      : firstGoalAway;
+    const teamScoresProbability = poissonAtLeastOne(playerTeamLambda);
+    const playerGoalShare =
+      teamScoresProbability > 0
+        ? Math.min(0.65, player.anytime_scorer_probability / teamScoresProbability)
+        : 0;
+    const firstScorerProbability = teamFirstGoalProbability * playerGoalShare;
     const scorerBook = bestPlayerOutcome(
       snapshots,
       "player_goal_scorer_anytime",
@@ -1321,6 +1349,22 @@ function buildSuggestions(
         tags: ["player_goal", "player_assist", `player_${player.player_id}`],
       }),
       makeSuggestion({
+        id: `player_first_goal_${player.player_id}`,
+        category: "Joueurs",
+        market: "Premier buteur",
+        selection: player.player,
+        label: `${player.player} marque le premier but`,
+        probability: firstScorerProbability,
+        source: "model",
+        confidence: "low",
+        rationale: "Approximation derivee de la probabilite que son equipe marque en premier et de sa part de buts attendue.",
+        data_level: "proxy",
+        data_note:
+          "Marche tres volatile: attendre une vraie cote bookmaker et les compositions avant usage.",
+        conflict_key: "first_goal_scorer",
+        tags: ["proxy_model", "player_goal", `player_${player.player_id}`, "high_variance"],
+      }),
+      makeSuggestion({
         id: `player_sot_${player.player_id}`,
         category: "Joueurs - tirs",
         market: "Tir cadre",
@@ -1376,27 +1420,26 @@ function buildSuggestions(
       }),
     );
 
-    if (cardBook) {
-      suggestions.push(
-        makeSuggestion({
-          id: `player_card_${player.player_id}`,
-          category: "Joueurs - discipline",
-          market: "Carton joueur",
-          selection: player.player,
-          label: `${player.player} recoit un carton`,
-          probability: cardProbability(player.position, player.reliability),
-          source: "bookmaker",
-          odds: { price: cardBook.price, bookmaker: cardBook.bookmaker },
-          confidence: "low",
-          rationale: "Proxy discipline base sur le poste; cote bookmaker reelle disponible.",
-          data_level: "bookmaker",
-          data_note:
-            "A confirmer avec composition, role defensif et arbitre avant de jouer.",
-          conflict_key: `player_${player.player_id}_card`,
-          tags: ["player_card", `player_${player.player_id}`, "high_variance"],
-        }),
-      );
-    }
+    suggestions.push(
+      makeSuggestion({
+        id: `player_card_${player.player_id}`,
+        category: "Joueurs - discipline",
+        market: "Carton joueur",
+        selection: player.player,
+        label: `${player.player} recoit un carton`,
+        probability: playerCardProbability,
+        source: cardBook ? "bookmaker" : "model",
+        odds: cardBook ? { price: cardBook.price, bookmaker: cardBook.bookmaker } : undefined,
+        confidence: "low",
+        rationale: "Proxy discipline base sur le poste; le risque augmente pour milieux/defenseurs.",
+        data_level: cardBook ? "bookmaker" : "proxy",
+        data_note: cardBook
+          ? "Cote bookmaker disponible, mais a confirmer avec composition, role defensif et arbitre."
+          : "Pas de cote bookmaker detectee: signal informatif, pas une recommandation jouable.",
+        conflict_key: `player_${player.player_id}_card`,
+        tags: ["player_card", `player_${player.player_id}`, "high_variance", ...(cardBook ? [] : ["proxy_model"])],
+      }),
+    );
   }
 
   appendBookmakerOnlyPlayerProps(suggestions, snapshots);

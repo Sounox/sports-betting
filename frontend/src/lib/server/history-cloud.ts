@@ -330,9 +330,14 @@ CREATE TABLE IF NOT EXISTS player_projection_snapshots (
   tournament_goals INTEGER DEFAULT 0,
   tournament_assists INTEGER DEFAULT 0,
   expected_goals REAL,
+  expected_assists REAL,
   anytime_scorer_probability REAL,
   brace_probability REAL,
   assist_probability REAL,
+  goal_or_assist_probability REAL,
+  shot_on_target_probability REAL,
+  two_shots_on_target_probability REAL,
+  card_probability REAL,
   outside_box_goal_probability REAL,
   reliability TEXT,
   evidence_json TEXT,
@@ -393,6 +398,11 @@ const OPTIONAL_MIGRATIONS = [
   "ALTER TABLE backtest_results ADD COLUMN closing_captured_at TEXT",
   "ALTER TABLE backtest_results ADD COLUMN clv REAL",
   "ALTER TABLE backtest_results ADD COLUMN closing_source TEXT",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN expected_assists REAL",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN goal_or_assist_probability REAL",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN shot_on_target_probability REAL",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN two_shots_on_target_probability REAL",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN card_probability REAL",
 ];
 
 function json(value: unknown) {

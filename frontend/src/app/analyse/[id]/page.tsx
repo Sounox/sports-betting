@@ -312,7 +312,12 @@ function topPlayableSuggestions(builder?: MatchBetBuilder | null) {
 
 function topPlayerHighlights(insights?: PlayerInsights | null) {
   return (insights?.players || [])
-    .filter((player) => player.anytime_scorer_probability > 0.08 || player.assist_probability > 0.08)
+    .filter(
+      (player) =>
+        player.anytime_scorer_probability > 0.08 ||
+        player.assist_probability > 0.08 ||
+        player.shot_on_target_probability > 0.18,
+    )
     .sort(
       (a, b) =>
         b.anytime_scorer_probability +
@@ -459,8 +464,8 @@ function MatchCommandCenter({
               </div>
               <div className="mt-2 grid grid-cols-3 gap-2">
                 <Stat label="Buteur" value={pct(player.anytime_scorer_probability)} />
-                <Stat label="Passe" value={pct(player.assist_probability)} />
-                <Stat label="Double" value={pct(player.brace_probability)} />
+                <Stat label="But/Passe" value={pct(player.goal_or_assist_probability || player.assist_probability)} />
+                <Stat label="Tir cadre" value={pct(player.shot_on_target_probability)} />
               </div>
             </div>
           ))
@@ -1237,14 +1242,19 @@ function PlayerInsightsPanel({ insights }: { insights: PlayerInsights }) {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[1080px] text-sm">
           <thead>
             <tr className="border-b border-gray-800 text-left text-xs text-gray-500">
               <th className="pb-2 pr-3">Joueur</th>
               <th className="pb-2 px-2 text-center">Forme tournoi</th>
+              <th className="pb-2 px-2 text-center">xG / xA</th>
               <th className="pb-2 px-2 text-center">Buteur</th>
+              <th className="pb-2 px-2 text-center">But/Passe</th>
               <th className="pb-2 px-2 text-center">Doublé</th>
               <th className="pb-2 px-2 text-center">Passe déc.</th>
+              <th className="pb-2 px-2 text-center">1+ tir cadre</th>
+              <th className="pb-2 px-2 text-center">2+ tirs cadres</th>
+              <th className="pb-2 px-2 text-center">Carton</th>
               <th className="pb-2 px-2 text-center">Hors surface</th>
               <th className="pb-2 pl-2 text-right">Fiabilité</th>
             </tr>
@@ -1264,9 +1274,17 @@ function PlayerInsightsPanel({ insights }: { insights: PlayerInsights }) {
                     {player.tournament_matches} match(s)
                   </div>
                 </td>
+                <td className="px-2 text-center text-xs text-gray-300">
+                  {player.expected_goals.toFixed(2)} / {player.expected_assists.toFixed(2)}
+                  <div className="text-gray-600">attendus</div>
+                </td>
                 <ProbabilityCell value={player.anytime_scorer_probability} strong />
+                <ProbabilityCell value={player.goal_or_assist_probability} strong />
                 <ProbabilityCell value={player.brace_probability} />
                 <ProbabilityCell value={player.assist_probability} />
+                <ProbabilityCell value={player.shot_on_target_probability} />
+                <ProbabilityCell value={player.two_shots_on_target_probability} experimental />
+                <ProbabilityCell value={player.card_probability} experimental />
                 <ProbabilityCell value={player.outside_box_goal_probability} experimental />
                 <td className="pl-2 text-right">
                   <span className={clsx(

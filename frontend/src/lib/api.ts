@@ -277,9 +277,14 @@ export interface PlayerProjection {
   tournament_goals: number;
   tournament_assists: number;
   expected_goals: number;
+  expected_assists: number;
   anytime_scorer_probability: number;
   brace_probability: number;
   assist_probability: number;
+  goal_or_assist_probability: number;
+  shot_on_target_probability: number;
+  two_shots_on_target_probability: number;
+  card_probability: number;
   outside_box_goal_probability: number;
   reliability: "low" | "medium" | "high";
   evidence: string[];

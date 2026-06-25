@@ -55,9 +55,14 @@ interface PlayerSnapshotRow {
   tournament_goals: number;
   tournament_assists: number;
   expected_goals: number;
+  expected_assists: number;
   anytime_scorer_probability: number;
   brace_probability: number;
   assist_probability: number;
+  goal_or_assist_probability: number;
+  shot_on_target_probability: number;
+  two_shots_on_target_probability: number;
+  card_probability: number;
   outside_box_goal_probability: number;
   reliability: "low" | "medium" | "high";
   evidence_json: string | null;
@@ -75,9 +80,14 @@ export interface PlayerProjection {
   tournament_goals: number;
   tournament_assists: number;
   expected_goals: number;
+  expected_assists: number;
   anytime_scorer_probability: number;
   brace_probability: number;
   assist_probability: number;
+  goal_or_assist_probability: number;
+  shot_on_target_probability: number;
+  two_shots_on_target_probability: number;
+  card_probability: number;
   outside_box_goal_probability: number;
   reliability: "low" | "medium" | "high";
   evidence: string[];
@@ -116,9 +126,14 @@ CREATE TABLE IF NOT EXISTS player_projection_snapshots (
   tournament_goals INTEGER DEFAULT 0,
   tournament_assists INTEGER DEFAULT 0,
   expected_goals REAL,
+  expected_assists REAL,
   anytime_scorer_probability REAL,
   brace_probability REAL,
   assist_probability REAL,
+  goal_or_assist_probability REAL,
+  shot_on_target_probability REAL,
+  two_shots_on_target_probability REAL,
+  card_probability REAL,
   outside_box_goal_probability REAL,
   reliability TEXT,
   evidence_json TEXT,
@@ -135,6 +150,14 @@ CREATE INDEX IF NOT EXISTS idx_player_projection_player_time
 `;
 
 let playerSchemaReady = false;
+
+const OPTIONAL_PLAYER_MIGRATIONS = [
+  "ALTER TABLE player_projection_snapshots ADD COLUMN expected_assists REAL",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN goal_or_assist_probability REAL",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN shot_on_target_probability REAL",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN two_shots_on_target_probability REAL",
+  "ALTER TABLE player_projection_snapshots ADD COLUMN card_probability REAL",
+];
 
 function getDb(): D1Database | null {
   try {
@@ -156,6 +179,19 @@ async function ensurePlayerSchema(db: D1Database) {
     .filter(Boolean)
     .map((statement) => db.prepare(statement));
   await db.batch(statements);
+  for (const migration of OPTIONAL_PLAYER_MIGRATIONS) {
+    try {
+      await db.prepare(migration).run();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        !message.toLowerCase().includes("duplicate column") &&
+        !message.toLowerCase().includes("already exists")
+      ) {
+        throw error;
+      }
+    }
+  }
   playerSchemaReady = true;
 }
 
@@ -166,6 +202,18 @@ function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function projectedGoalOrAssist(goalProbability: number, assistProbability: number) {
+  return 1 - (1 - goalProbability) * (1 - assistProbability);
+}
+
+function round4(value: number) {
+  return Number(value.toFixed(4));
+}
+
+function fallbackShotOnTarget(expectedGoals: number, position: string) {
+  return poissonAtLeastOne(expectedGoals * positionPrior(position).shot);
 }
 
 async function readCachedPlayerInsights(
@@ -223,11 +271,36 @@ async function readCachedPlayerInsights(
       tournament_goals: Number(row.tournament_goals || 0),
       tournament_assists: Number(row.tournament_assists || 0),
       expected_goals: Number(row.expected_goals || 0),
+      expected_assists: Number(row.expected_assists || 0),
       anytime_scorer_probability: Number(
         row.anytime_scorer_probability || 0,
       ),
       brace_probability: Number(row.brace_probability || 0),
       assist_probability: Number(row.assist_probability || 0),
+      goal_or_assist_probability: Number(
+        row.goal_or_assist_probability ||
+          round4(projectedGoalOrAssist(
+            Number(row.anytime_scorer_probability || 0),
+            Number(row.assist_probability || 0),
+          )),
+      ),
+      shot_on_target_probability: Number(
+        row.shot_on_target_probability ||
+          round4(fallbackShotOnTarget(
+            Number(row.expected_goals || 0),
+            row.position || "Unknown",
+          )),
+      ),
+      two_shots_on_target_probability: Number(
+        row.two_shots_on_target_probability ||
+          round4(poissonAtLeastTwo(
+            Number(row.expected_goals || 0) *
+              positionPrior(row.position || "Unknown").shot,
+          )),
+      ),
+      card_probability: Number(
+        row.card_probability || round4(positionPrior(row.position || "Unknown").card),
+      ),
       outside_box_goal_probability: Number(
         row.outside_box_goal_probability || 0,
       ),
@@ -254,11 +327,13 @@ async function persistPlayerInsights(event: Event, insights: PlayerInsights) {
         `INSERT INTO player_projection_snapshots (
           event_id, captured_at, scheduled_at, home_team, away_team,
           player_id, player_name, team_name, position, tournament_matches,
-          tournament_goals, tournament_assists, expected_goals,
+          tournament_goals, tournament_assists, expected_goals, expected_assists,
           anytime_scorer_probability, brace_probability, assist_probability,
+          goal_or_assist_probability, shot_on_target_probability,
+          two_shots_on_target_probability, card_probability,
           outside_box_goal_probability, reliability, evidence_json,
           data_freshness_json, methodology, warnings_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         event.id,
@@ -274,9 +349,14 @@ async function persistPlayerInsights(event: Event, insights: PlayerInsights) {
         player.tournament_goals,
         player.tournament_assists,
         player.expected_goals,
+        player.expected_assists,
         player.anytime_scorer_probability,
         player.brace_probability,
         player.assist_probability,
+        player.goal_or_assist_probability,
+        player.shot_on_target_probability,
+        player.two_shots_on_target_probability,
+        player.card_probability,
         player.outside_box_goal_probability,
         player.reliability,
         JSON.stringify(player.evidence),
@@ -294,15 +374,19 @@ async function persistPlayerInsights(event: Event, insights: PlayerInsights) {
 function positionPrior(position?: string | null) {
   const normalized = (position || "").toLowerCase();
   if (normalized.includes("offence") || normalized.includes("forward")) {
-    return { goal: 1.2, assist: 0.55, outside: 0.1 };
+    return { goal: 1.2, assist: 0.55, outside: 0.1, shot: 2.8, card: 0.1 };
   }
   if (normalized.includes("midfield")) {
-    return { goal: 0.55, assist: 0.85, outside: 0.18 };
+    return { goal: 0.55, assist: 0.85, outside: 0.18, shot: 2.15, card: 0.17 };
   }
   if (normalized.includes("defence")) {
-    return { goal: 0.16, assist: 0.2, outside: 0.12 };
+    return { goal: 0.16, assist: 0.2, outside: 0.12, shot: 1.25, card: 0.22 };
   }
-  return { goal: 0.015, assist: 0.02, outside: 0.02 };
+  return { goal: 0.015, assist: 0.02, outside: 0.02, shot: 0.5, card: 0.08 };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function poissonAtLeastOne(lambda: number) {
@@ -383,6 +467,18 @@ function projectTeamPlayers(
         ? expectedTeamGoals * 0.7 * (item.assistWeight / totalAssistWeight)
         : 0;
     const scorerProbability = poissonAtLeastOne(expectedGoals);
+    const assistProbability = poissonAtLeastOne(expectedAssists);
+    const goalOrAssistProbability =
+      1 - (1 - scorerProbability) * (1 - assistProbability);
+    const shotOnTargetLambda = expectedGoals * item.prior.shot;
+    const shotOnTargetProbability = poissonAtLeastOne(shotOnTargetLambda);
+    const twoShotsOnTargetProbability = poissonAtLeastTwo(shotOnTargetLambda);
+    const cardProbability = clamp(
+      item.prior.card *
+        (item.played >= 2 ? 1.05 : item.played >= 1 ? 1 : 0.85),
+      0.03,
+      0.32,
+    );
     const sampleReliability =
       item.played >= 2 && item.goals + item.assists >= 1
         ? "high"
@@ -399,9 +495,16 @@ function projectTeamPlayers(
       tournament_goals: item.goals,
       tournament_assists: item.assists,
       expected_goals: Number(expectedGoals.toFixed(3)),
+      expected_assists: Number(expectedAssists.toFixed(3)),
       anytime_scorer_probability: Number(scorerProbability.toFixed(4)),
       brace_probability: Number(poissonAtLeastTwo(expectedGoals).toFixed(4)),
-      assist_probability: Number(poissonAtLeastOne(expectedAssists).toFixed(4)),
+      assist_probability: Number(assistProbability.toFixed(4)),
+      goal_or_assist_probability: Number(goalOrAssistProbability.toFixed(4)),
+      shot_on_target_probability: Number(shotOnTargetProbability.toFixed(4)),
+      two_shots_on_target_probability: Number(
+        twoShotsOnTargetProbability.toFixed(4),
+      ),
+      card_probability: Number(cardProbability.toFixed(4)),
       outside_box_goal_probability: Number(
         (scorerProbability * item.prior.outside).toFixed(4),
       ),
