@@ -12,6 +12,11 @@ export async function POST(
   const body = (await request.json().catch(() => ({}))) as Partial<MatchParlayRequest>;
   const targetOdds = Number(body.target_odds);
   const stake = body.stake == null ? undefined : Number(body.stake);
+  const requestedMaxLegs = Number(body.max_legs ?? 4);
+  const maxLegs =
+    Number.isFinite(requestedMaxLegs) && requestedMaxLegs >= 1
+      ? Math.min(5, Math.max(1, Math.trunc(requestedMaxLegs)))
+      : 4;
 
   if (!Number.isFinite(targetOdds) || targetOdds < 1.1 || targetOdds > 50) {
     return NextResponse.json(
@@ -24,7 +29,7 @@ export async function POST(
     const result = await generateSameMatchParlay(Number(eventId), {
       target_odds: targetOdds,
       stake: Number.isFinite(stake) ? stake : undefined,
-      max_legs: body.max_legs || 4,
+      max_legs: maxLegs,
     });
     return NextResponse.json(result);
   } catch (error) {

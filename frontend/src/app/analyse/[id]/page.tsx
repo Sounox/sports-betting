@@ -244,7 +244,7 @@ export default function AnalysePage() {
         <>
           <SameMatchParlayPanel eventId={Number(id)} />
           {oddsHistory && <OddsHistoryPanel history={oddsHistory} />}
-          <BetSuggestionsPanel builder={betBuilder} />
+          <BetSuggestionsPanel eventId={Number(id)} builder={betBuilder} />
         </>
       )}
 
@@ -703,7 +703,13 @@ function explorerSuggestionScore(suggestion: BetSuggestion) {
   return playability + source + reliability + edge + suggestion.probability * 40;
 }
 
-function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
+function BetSuggestionsPanel({
+  eventId,
+  builder,
+}: {
+  eventId: number;
+  builder: MatchBetBuilder;
+}) {
   const [oddsScope, setOddsScope] = useState<OddsScope>("fr");
   const frCount = builder.suggestions.filter((suggestion) =>
     suggestionMatchesScope(suggestion, "fr"),
@@ -801,7 +807,7 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
       )}
 
       {builder.market_catalog && builder.market_catalog.length > 0 && (
-        <MarketExplorerPanel builder={builder} />
+        <MarketExplorerPanel eventId={eventId} builder={builder} />
       )}
 
       <div className="flex flex-col gap-2 rounded-2xl border border-gray-800 bg-gray-950/60 p-3 md:flex-row md:items-center md:justify-between">
@@ -1032,7 +1038,13 @@ function MarketCatalogCard({ entry }: { entry: MatchMarketCatalogEntry }) {
   );
 }
 
-function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
+function MarketExplorerPanel({
+  eventId,
+  builder,
+}: {
+  eventId: number;
+  builder: MatchBetBuilder;
+}) {
   const catalog = builder.market_catalog || [];
   const preferredEntry =
     catalog.find((entry) => entry.playable_count > 0 && entry.status === "fr_available") ||
@@ -1045,6 +1057,9 @@ function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
   const [ticketSelectionIds, setTicketSelectionIds] = useState<string[]>([]);
   const [ticketTargetOdds, setTicketTargetOdds] = useState("3.00");
   const [ticketStake, setTicketStake] = useState("");
+  const [autoTicketLoading, setAutoTicketLoading] = useState(false);
+  const [autoTicketError, setAutoTicketError] = useState("");
+  const [autoTicketResult, setAutoTicketResult] = useState<MatchParlayResponse | null>(null);
   const selectedEntry =
     catalog.find((entry) => marketCatalogKey(entry) === selectedKey) ||
     preferredEntry;
@@ -1053,6 +1068,8 @@ function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
     .filter((suggestion): suggestion is BetSuggestion => Boolean(suggestion));
 
   const toggleTicketSuggestion = (suggestion: BetSuggestion) => {
+    setAutoTicketResult(null);
+    setAutoTicketError("");
     setTicketSelectionIds((current) => {
       if (current.includes(suggestion.id)) {
         return current.filter((id) => id !== suggestion.id);
@@ -1069,6 +1086,36 @@ function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
       if (withoutConflicts.length >= 5) return current;
       return [...withoutConflicts, suggestion.id];
     });
+  };
+
+  const generateAutoTicket = async () => {
+    const targetOdds = Number(ticketTargetOdds);
+    const stake = Number(ticketStake);
+    if (!Number.isFinite(targetOdds) || targetOdds < 1.1) {
+      setAutoTicketError("Entre une cote cible valide, minimum 1.10.");
+      return;
+    }
+
+    setAutoTicketLoading(true);
+    setAutoTicketError("");
+    setAutoTicketResult(null);
+    try {
+      const response = await api.generateSameMatchParlay(eventId, {
+        target_odds: targetOdds,
+        stake: Number.isFinite(stake) && stake > 0 ? stake : undefined,
+        max_legs: 4,
+      });
+      setAutoTicketResult(response);
+      if (response.success && response.parlay) {
+        setTicketSelectionIds(response.parlay.legs.map((leg) => leg.id));
+      } else {
+        setAutoTicketError(response.message || "Aucun ticket recommande dans ces conditions.");
+      }
+    } catch (error) {
+      setAutoTicketError(error instanceof Error ? error.message : "Generation automatique indisponible.");
+    } finally {
+      setAutoTicketLoading(false);
+    }
   };
 
   if (!selectedEntry) return null;
@@ -1220,10 +1267,20 @@ function MarketExplorerPanel({ builder }: { builder: MatchBetBuilder }) {
             stake={ticketStake}
             onTargetOddsChange={setTicketTargetOdds}
             onStakeChange={setTicketStake}
-            onRemove={(id) =>
-              setTicketSelectionIds((current) => current.filter((selectedId) => selectedId !== id))
-            }
-            onClear={() => setTicketSelectionIds([])}
+            autoLoading={autoTicketLoading}
+            autoError={autoTicketError}
+            autoResult={autoTicketResult}
+            onAutoGenerate={generateAutoTicket}
+            onRemove={(id) => {
+              setAutoTicketResult(null);
+              setAutoTicketError("");
+              setTicketSelectionIds((current) => current.filter((selectedId) => selectedId !== id));
+            }}
+            onClear={() => {
+              setAutoTicketResult(null);
+              setAutoTicketError("");
+              setTicketSelectionIds([]);
+            }}
           />
 
           {visible.length === 0 ? (
@@ -1258,6 +1315,10 @@ function MarketExplorerTicket({
   stake,
   onTargetOddsChange,
   onStakeChange,
+  autoLoading,
+  autoError,
+  autoResult,
+  onAutoGenerate,
   onRemove,
   onClear,
 }: {
@@ -1266,6 +1327,10 @@ function MarketExplorerTicket({
   stake: string;
   onTargetOddsChange: (value: string) => void;
   onStakeChange: (value: string) => void;
+  autoLoading: boolean;
+  autoError: string;
+  autoResult: MatchParlayResponse | null;
+  onAutoGenerate: () => void;
   onRemove: (id: string) => void;
   onClear: () => void;
 }) {
@@ -1273,13 +1338,20 @@ function MarketExplorerTicket({
   const estimatedProbability = selected.length
     ? selected.reduce((product, suggestion) => product * boundedProbability(suggestion.probability), 1)
     : 0;
-  const approximateEv = selected.length ? estimatedProbability * totalOdds - 1 : 0;
   const targetValue = Number(targetOdds);
   const stakeValue = Number(stake);
   const hasTarget = Number.isFinite(targetValue) && targetValue > 1;
   const hasStake = Number.isFinite(stakeValue) && stakeValue > 0;
-  const targetGap = hasTarget && selected.length ? totalOdds - targetValue : null;
-  const potentialReturn = hasStake && selected.length ? stakeValue * totalOdds : null;
+  const backendTotalOdds = autoResult?.success && autoResult.parlay ? autoResult.parlay.total_odds : null;
+  const backendProbability =
+    autoResult?.success && autoResult.parlay ? autoResult.parlay.estimated_probability : null;
+  const backendPotentialReturn =
+    autoResult?.success && autoResult.parlay ? autoResult.parlay.potential_return : null;
+  const displayedTicketOdds = backendTotalOdds ?? totalOdds;
+  const displayedTicketProbability = backendProbability ?? estimatedProbability;
+  const approximateEv = selected.length ? displayedTicketProbability * displayedTicketOdds - 1 : 0;
+  const targetGap = hasTarget && selected.length ? displayedTicketOdds - targetValue : null;
+  const potentialReturn = hasStake && selected.length ? stakeValue * displayedTicketOdds : null;
   const unconfirmedCount = selected.filter(
     (suggestion) => suggestion.source !== "bookmaker" || !suggestion.offered_odds,
   ).length;
@@ -1339,20 +1411,55 @@ function MarketExplorerTicket({
               className="w-full rounded-xl border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500"
             />
           </label>
+          <button
+            type="button"
+            onClick={onAutoGenerate}
+            disabled={autoLoading || !hasTarget}
+            className={clsx(
+              "col-span-2 rounded-xl border px-3 py-2 text-xs font-black uppercase tracking-wide transition-colors lg:col-span-1",
+              autoLoading || !hasTarget
+                ? "cursor-not-allowed border-gray-800 bg-gray-950 text-gray-600"
+                : "border-cyan-600/70 bg-cyan-500/15 text-cyan-100 hover:border-cyan-300",
+            )}
+          >
+            {autoLoading ? "Recherche..." : "Auto proche cible"}
+          </button>
         </div>
 
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
             <Stat label="Selections" value={String(selected.length)} highlight={selected.length ? "green" : undefined} />
-            <Stat label="Cote ticket" value={selected.length ? formatOdds(totalOdds) : "n/a"} highlight={selected.length ? "green" : undefined} />
-            <Stat label="Proba approx." value={selected.length ? `${(estimatedProbability * 100).toFixed(1)}%` : "n/a"} />
+            <Stat
+              label="Cote ticket"
+              value={selected.length ? formatOdds(displayedTicketOdds) : "n/a"}
+              highlight={selected.length ? "green" : undefined}
+            />
+            <Stat
+              label="Proba approx."
+              value={selected.length ? `${(displayedTicketProbability * 100).toFixed(1)}%` : "n/a"}
+            />
             <Stat
               label="EV approx."
               value={selected.length ? `${approximateEv >= 0 ? "+" : ""}${(approximateEv * 100).toFixed(1)}%` : "n/a"}
               highlight={selected.length ? (approximateEv > 0 ? "green" : "red") : undefined}
             />
-            <Stat label="Retour" value={potentialReturn == null ? "n/a" : formatCurrencyEUR(potentialReturn)} />
+            <Stat
+              label="Retour"
+              value={(backendPotentialReturn ?? potentialReturn) == null ? "n/a" : formatCurrencyEUR(backendPotentialReturn ?? potentialReturn ?? 0)}
+            />
           </div>
+
+          {autoError && (
+            <div className="rounded-xl border border-yellow-900 bg-yellow-950/25 p-3 text-xs text-yellow-200">
+              {autoError}
+            </div>
+          )}
+
+          {autoResult?.success && autoResult.parlay && (
+            <div className="rounded-xl border border-cyan-800/60 bg-cyan-950/20 p-3 text-xs text-cyan-100">
+              Ticket automatique applique: le backend a choisi {autoResult.parlay.legs.length} selection(s) pour viser {formatOdds(autoResult.target_odds)} avec les contraintes de fiabilite.
+            </div>
+          )}
 
           {selected.length === 0 ? (
             <div className="rounded-xl border border-gray-800 bg-gray-950/70 p-3 text-xs text-gray-500">
@@ -1402,6 +1509,9 @@ function MarketExplorerTicket({
               {negativeEdgeCount > 0 && (
                 <p>{negativeEdgeCount} selection(s) ont un edge non positif: a surveiller plutot qu'a recommander.</p>
               )}
+              {autoResult?.success && autoResult.parlay?.warnings.map((warning, index) => (
+                <p key={index}>{warning}</p>
+              ))}
             </div>
           )}
         </div>
