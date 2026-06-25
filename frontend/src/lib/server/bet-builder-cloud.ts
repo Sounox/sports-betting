@@ -556,6 +556,166 @@ function hasAdverseMarketSignal(suggestion: BetSuggestion) {
   );
 }
 
+function marketReliabilityBase(suggestion: BetSuggestion) {
+  const market = normalize(suggestion.market);
+  if (["1n2", "totalbuts", "butsequipe"].includes(market)) return 72;
+  if (["doublechance", "remboursesisinul", "lesdeuxequipesmarquent"].includes(market)) return 68;
+  if (market.includes("handicap")) return 66;
+  if (market.includes("clean") || market.includes("victoire")) return 58;
+  if (market.includes("resultatmi") || market.includes("premiereequipe")) return 54;
+  if (market.includes("buteur") || market.includes("passedecisive") || market.includes("butoupasse")) return 48;
+  if (market.includes("tircadre") || market.includes("tirscadres")) return 44;
+  if (market.includes("cartonjoueur")) return 38;
+  if (market.includes("corners") || market.includes("cartons")) return 34;
+  if (market.includes("scoreexact") || market.includes("double") || market.includes("horssurface")) return 24;
+  return 46;
+}
+
+function marketReliabilityCap(suggestion: BetSuggestion) {
+  const market = normalize(suggestion.market);
+  if (suggestion.data_level === "proxy") return 52;
+  if (market.includes("scoreexact") || market.includes("horssurface")) return 36;
+  if (market.includes("premierbuteur") || market.includes("double")) return 46;
+  if (market.includes("cartonjoueur")) return 64;
+  if (market.includes("tircadre") || market.includes("tirscadres")) return 74;
+  if (market.includes("buteur") || market.includes("passedecisive") || market.includes("butoupasse")) return 78;
+  if (market.includes("corners") || market.includes("cartons")) return 58;
+  return 92;
+}
+
+function reliabilityAssessment(suggestion: BetSuggestion) {
+  const reasons: string[] = [];
+  let score = marketReliabilityBase(suggestion);
+
+  if (suggestion.data_level === "bookmaker") {
+    score += 12;
+    reasons.push("cote bookmaker disponible");
+  } else if (suggestion.data_level === "proxy") {
+    score -= 18;
+    reasons.push("projection proxy experimentale");
+  } else {
+    score += 2;
+    reasons.push("projection modele");
+  }
+
+  if (suggestion.offered_odds) score += 6;
+  else score -= 5;
+
+  if ((suggestion.edge ?? 0) >= 0.06) {
+    score += 8;
+    reasons.push("edge positif net");
+  } else if ((suggestion.edge ?? 0) >= 0.025) {
+    score += 4;
+    reasons.push("edge positif modere");
+  } else if (suggestion.edge != null && suggestion.edge < 0) {
+    score -= 14;
+    reasons.push("edge negatif");
+  }
+
+  if (suggestion.confidence === "high") score += 8;
+  if (suggestion.confidence === "medium") score += 2;
+  if (suggestion.confidence === "low") score -= 9;
+
+  if (suggestion.probability >= 0.62) score += 4;
+  if (suggestion.probability < 0.16) score -= 7;
+
+  if (suggestion.market_signal?.verdict === "favorable") {
+    score += suggestion.market_signal.signal_strength === "high" ? 7 : 4;
+    reasons.push("marche favorable");
+  }
+  if (hasAdverseMarketSignal(suggestion)) {
+    score -= suggestion.market_signal?.signal_strength === "high" ? 13 : 8;
+    reasons.push("marche defavorable");
+  }
+
+  if (suggestion.tags.includes("high_variance")) {
+    score -= 12;
+    reasons.push("forte variance");
+  }
+  if (suggestion.tags.includes("exact_score")) score -= 16;
+  if (suggestion.tags.includes("proxy_model")) score -= 6;
+
+  const reliabilityScore = round(
+    Math.max(0, Math.min(marketReliabilityCap(suggestion), score)),
+    1,
+  );
+  const reliabilityLabel: BetSuggestion["reliability_label"] =
+    reliabilityScore >= 70 ? "forte" : reliabilityScore >= 45 ? "moyenne" : "faible";
+  const playability: BetSuggestion["playability"] =
+    reliabilityScore >= 68 &&
+    suggestion.data_level !== "proxy" &&
+    !suggestion.tags.includes("high_variance") &&
+    !hasAdverseMarketSignal(suggestion)
+      ? "jouable"
+      : reliabilityScore >= 42
+        ? "surveillance"
+        : "eviter";
+  const riskLevel =
+    playability === "eviter"
+      ? "aggressive"
+      : reliabilityScore >= 76 && suggestion.risk_level === "balanced"
+        ? "prudent"
+        : suggestion.risk_level;
+
+  return {
+    ...suggestion,
+    risk_level: riskLevel,
+    reliability_score: reliabilityScore,
+    reliability_label: reliabilityLabel,
+    reliability_reasons: reasons.slice(0, 4),
+    playability,
+  };
+}
+
+function dedupeKey(suggestion: BetSuggestion) {
+  return [
+    suggestion.category,
+    suggestion.market,
+    normalize(suggestion.label),
+    suggestion.conflict_key.startsWith("spread_") ? extractLine(suggestion.selection) ?? "" : "",
+  ].join("|");
+}
+
+function suggestionQualityRank(suggestion: BetSuggestion) {
+  const reliability = suggestion.reliability_score ?? 0;
+  const edge = suggestion.edge == null ? -4 : suggestion.edge * 120;
+  const odds = suggestion.offered_odds ? Math.min(20, suggestion.offered_odds) : 0;
+  const source = suggestion.data_level === "bookmaker" ? 12 : suggestion.data_level === "model" ? 3 : -8;
+  const market = suggestion.market_signal?.score_adjustment || 0;
+  const avoid = suggestion.playability === "eviter" ? -18 : suggestion.playability === "jouable" ? 8 : 0;
+  return reliability + edge + odds + source + market + avoid;
+}
+
+function dedupeSuggestions(suggestions: BetSuggestion[]) {
+  const best = new Map<string, BetSuggestion>();
+  for (const suggestion of suggestions) {
+    const key = dedupeKey(suggestion);
+    const current = best.get(key);
+    if (!current || suggestionQualityRank(suggestion) > suggestionQualityRank(current)) {
+      best.set(key, suggestion);
+    }
+  }
+  return [...best.values()];
+}
+
+function finalSuggestionSort(a: BetSuggestion, b: BetSuggestion) {
+  const playabilityOrder = { jouable: 0, surveillance: 1, eviter: 2 } as const;
+  const playDelta =
+    (playabilityOrder[a.playability || "surveillance"] ?? 1) -
+    (playabilityOrder[b.playability || "surveillance"] ?? 1);
+  if (playDelta !== 0) return playDelta;
+  return suggestionQualityRank(b) - suggestionQualityRank(a);
+}
+
+function finalizeSuggestions(
+  suggestions: BetSuggestion[],
+  movements: OddsMovementSignal[],
+) {
+  return dedupeSuggestions(
+    applyMarketSignalsToSuggestions(suggestions, movements).map(reliabilityAssessment),
+  ).sort(finalSuggestionSort);
+}
+
 function buildSuggestions(
   event: Event,
   playerInsights: PlayerInsights | null,
@@ -1508,6 +1668,8 @@ function buildSameMatchParlay(
         suggestion.probability >= 0.32 &&
         suggestion.confidence !== "low" &&
         suggestion.data_level !== "proxy" &&
+        suggestion.playability !== "eviter" &&
+        (suggestion.reliability_score ?? 0) >= 58 &&
         !hasAdverseMarketSignal(suggestion) &&
         !suggestion.tags.includes("exact_score") &&
         !suggestion.tags.includes("proxy_model") &&
@@ -1606,7 +1768,7 @@ export async function getMatchBetBuilder(
   )
     ? ((oddsHistory as { movements?: OddsMovementSignal[] }).movements || [])
     : [];
-  const suggestions = applyMarketSignalsToSuggestions(
+  const suggestions = finalizeSuggestions(
     buildSuggestions(event, players, snapshots),
     movements,
   );

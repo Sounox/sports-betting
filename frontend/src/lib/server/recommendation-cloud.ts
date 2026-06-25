@@ -667,12 +667,24 @@ function avoidReason(event: Event) {
 function radarScore(suggestion: BetSuggestion) {
   const edgeBoost = suggestion.edge ? Math.max(-8, suggestion.edge * 260) : 0;
   const marketSignalBoost = suggestion.market_signal?.score_adjustment || 0;
+  const reliabilityBoost =
+    suggestion.reliability_score == null
+      ? 0
+      : (suggestion.reliability_score - 50) * 0.45;
   const confidenceBoost =
     suggestion.confidence === "high" ? 10 : suggestion.confidence === "medium" ? 4 : -8;
   const riskPenalty =
     suggestion.risk_level === "aggressive" ? 9 : suggestion.risk_level === "balanced" ? 2 : 0;
+  const playabilityPenalty =
+    suggestion.playability === "eviter" ? 18 : suggestion.playability === "surveillance" ? 4 : 0;
   const score =
-    (suggestion.probability * 92 + edgeBoost + confidenceBoost + marketSignalBoost - riskPenalty) *
+    (suggestion.probability * 92 +
+      edgeBoost +
+      confidenceBoost +
+      reliabilityBoost +
+      marketSignalBoost -
+      riskPenalty -
+      playabilityPenalty) *
     sourceWeight(suggestion);
   return Number(clamp(score, 0, 100).toFixed(1));
 }
@@ -680,6 +692,10 @@ function radarScore(suggestion: BetSuggestion) {
 function isRadarCandidate(suggestion: BetSuggestion, includeProxy: boolean) {
   if (suggestion.category === "Resultat") return false;
   if (suggestion.category === "Score exact") return false;
+  if (suggestion.playability === "eviter" && suggestion.data_level !== "bookmaker") {
+    return false;
+  }
+  if ((suggestion.reliability_score ?? 100) < 28) return false;
   if (suggestion.tags.includes("exact_score")) return false;
   if (suggestion.tags.includes("high_variance") && suggestion.probability < 0.12) {
     return false;
@@ -735,6 +751,9 @@ export async function getMarketRadar(input: MarketRadarInput = {}) {
         score: radarScore(suggestion),
         rationale: suggestion.rationale,
         data_note: suggestion.data_note || radarReason(suggestion),
+        reliability_score: suggestion.reliability_score,
+        reliability_label: suggestion.reliability_label,
+        playability: suggestion.playability,
         market_signal: suggestion.market_signal,
       }));
   });

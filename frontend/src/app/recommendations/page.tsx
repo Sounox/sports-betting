@@ -415,6 +415,18 @@ function RadarCard({ suggestion }: { suggestion: MarketRadarSuggestion }) {
           <MarketSignalBadge signal={suggestion.market_signal} />
         )}
         <DataLevelBadge level={suggestion.data_level} />
+        {suggestion.reliability_score != null && (
+          <span className={clsx(
+            "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+            suggestion.playability === "jouable"
+              ? "bg-emerald-900/40 text-emerald-300"
+              : suggestion.playability === "eviter"
+                ? "bg-red-900/40 text-red-300"
+                : "bg-amber-900/40 text-amber-300",
+          )}>
+            {suggestion.playability || "surveillance"} · {suggestion.reliability_score.toFixed(0)}/100
+          </span>
+        )}
         <span className="text-[10px] text-gray-600">Risque {suggestion.risk_level}</span>
         <span className="text-[10px] text-gray-600">Conf. {suggestion.confidence}</span>
       </div>

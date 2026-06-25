@@ -299,10 +299,14 @@ function topPlayableSuggestions(builder?: MatchBetBuilder | null) {
     .filter((suggestion) => {
       if (suggestion.category === "Score exact") return false;
       if (suggestion.data_level === "proxy") return false;
+      if (suggestion.playability === "eviter") return false;
+      if ((suggestion.reliability_score ?? 0) < 55) return false;
       if (suggestion.offered_odds && (suggestion.edge || 0) > 0) return true;
       return suggestion.source === "model" && suggestion.probability >= 0.52;
     })
     .sort((a, b) => {
+      const reliabilityDelta = (b.reliability_score || 0) - (a.reliability_score || 0);
+      if (Math.abs(reliabilityDelta) > 5) return reliabilityDelta;
       const edgeDelta = (b.edge || 0) - (a.edge || 0);
       if (Math.abs(edgeDelta) > 0.005) return edgeDelta;
       return b.probability - a.probability;
@@ -699,6 +703,9 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
+        {suggestion.reliability_score != null && (
+          <ReliabilityBadge suggestion={suggestion} />
+        )}
         {suggestion.market_signal && (
           <MarketSignalBadge signal={suggestion.market_signal} />
         )}
@@ -726,6 +733,26 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
         <p className="text-[11px] text-gray-500 mt-2">{suggestion.data_note}</p>
       )}
     </div>
+  );
+}
+
+function ReliabilityBadge({ suggestion }: { suggestion: BetSuggestion }) {
+  const score = suggestion.reliability_score ?? 0;
+  const playability = suggestion.playability || "surveillance";
+  return (
+    <span
+      title={(suggestion.reliability_reasons || []).join(" - ")}
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+        playability === "jouable"
+          ? "bg-emerald-900/40 text-emerald-300"
+          : playability === "surveillance"
+            ? "bg-amber-900/40 text-amber-300"
+            : "bg-red-900/40 text-red-300",
+      )}
+    >
+      {playability} · fiabilite {score.toFixed(0)}/100
+    </span>
   );
 }
 

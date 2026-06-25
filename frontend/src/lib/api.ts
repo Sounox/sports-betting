@@ -186,6 +186,10 @@ export interface BetSuggestion {
   data_level?: "bookmaker" | "model" | "proxy";
   rationale: string;
   data_note?: string;
+  reliability_score?: number;
+  reliability_label?: "faible" | "moyenne" | "forte";
+  reliability_reasons?: string[];
+  playability?: "jouable" | "surveillance" | "eviter";
   conflict_key: string;
   tags: string[];
   market_signal?: MarketSignal;
@@ -469,6 +473,9 @@ export interface MarketRadarSuggestion {
   score: number;
   rationale: string;
   data_note: string;
+  reliability_score?: number;
+  reliability_label?: string;
+  playability?: string;
   market_signal?: MarketSignal;
 }
 
