@@ -641,15 +641,20 @@ function reliabilityAssessment(suggestion: BetSuggestion) {
   );
   const reliabilityLabel: BetSuggestion["reliability_label"] =
     reliabilityScore >= 70 ? "forte" : reliabilityScore >= 45 ? "moyenne" : "faible";
+  const negativeEdge = suggestion.edge != null && suggestion.edge < 0;
   const playability: BetSuggestion["playability"] =
-    reliabilityScore >= 68 &&
-    suggestion.data_level !== "proxy" &&
-    !suggestion.tags.includes("high_variance") &&
-    !hasAdverseMarketSignal(suggestion)
-      ? "jouable"
-      : reliabilityScore >= 42
+    negativeEdge
+      ? reliabilityScore >= 42
         ? "surveillance"
-        : "eviter";
+        : "eviter"
+      : reliabilityScore >= 68 &&
+          suggestion.data_level !== "proxy" &&
+          !suggestion.tags.includes("high_variance") &&
+          !hasAdverseMarketSignal(suggestion)
+        ? "jouable"
+        : reliabilityScore >= 42
+          ? "surveillance"
+          : "eviter";
   const riskLevel =
     playability === "eviter"
       ? "aggressive"
