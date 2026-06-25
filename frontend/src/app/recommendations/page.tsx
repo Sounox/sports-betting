@@ -40,6 +40,15 @@ function money(value: number) {
   return `${value.toFixed(2)} EUR`;
 }
 
+function signedPct(value: number) {
+  return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`;
+}
+
+function optionalPct(value?: number | null) {
+  if (value == null) return "n/a";
+  return pct(value);
+}
+
 export default function RecommendationsPage() {
   const [bankroll, setBankroll] = useState(1000);
   const [stake, setStake] = useState(20);
@@ -508,6 +517,115 @@ function StakeSignalBadge({ signal }: { signal: StakeAdjustmentSignal }) {
   );
 }
 
+function StakeAdjustmentJournal({
+  signal,
+  compact = false,
+}: {
+  signal?: StakeAdjustmentSignal;
+  compact?: boolean;
+}) {
+  if (!signal) return null;
+  const reduced = signal.verdict === "reduced";
+  const cappedBonus = signal.verdict === "capped_bonus";
+  const title = reduced
+    ? "Pourquoi cette mise reduite ?"
+    : cappedBonus
+      ? "Pourquoi cette mise ajustee ?"
+      : "Pourquoi cette mise ?";
+
+  return (
+    <div
+      className={clsx(
+        "mt-3 rounded-xl border p-3",
+        reduced
+          ? "border-yellow-900/55 bg-yellow-950/15"
+          : cappedBonus
+            ? "border-cyan-900/50 bg-cyan-950/15"
+            : "border-gray-800 bg-gray-900/60",
+      )}
+    >
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+        <div>
+          <div className="text-xs font-bold uppercase tracking-wide text-white">
+            {title}
+          </div>
+          <div className="text-[11px] text-gray-500 mt-0.5">
+            Journal de staking: calibration, CLV et mouvement de marche.
+          </div>
+        </div>
+        <div className="text-[11px] text-gray-400 sm:text-right">
+          {money(signal.original_stake)} {"->"}{" "}
+          <span className={reduced ? "text-yellow-300" : "text-cyan-300"}>
+            {money(signal.adjusted_stake)}
+          </span>
+        </div>
+      </div>
+
+      <div className={clsx("grid gap-2 mt-3", compact ? "grid-cols-3" : "grid-cols-1 sm:grid-cols-3")}>
+        <Mini label="Mise initiale" value={money(signal.original_stake)} />
+        <Mini label="Mise retenue" value={money(signal.adjusted_stake)} good={!reduced} />
+        <Mini label="Facteur" value={`${Math.round(signal.stake_factor * 100)}%`} good={!reduced} />
+      </div>
+
+      {signal.reasons.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          {signal.reasons.slice(0, 3).map((reason, index) => (
+            <div key={index} className="text-xs text-yellow-100/75">
+              {reason}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-3 grid grid-cols-1 gap-2">
+        {signal.calibration_signal && (
+          <StakeEvidenceLine
+            label="Calibration"
+            value={`${signal.calibration_signal.label} - ${signal.calibration_signal.sample_size} cas`}
+            detail={`Modele ${pct(signal.calibration_signal.avg_probability)}, reel ${pct(signal.calibration_signal.actual_rate)}, ecart ${signedPct(signal.calibration_signal.calibration_error)}.`}
+          />
+        )}
+        {signal.clv_signal && (
+          <StakeEvidenceLine
+            label="CLV"
+            value={`${signal.clv_signal.sample_size} cas - ${signal.clv_signal.verdict}`}
+            detail={`CLV moyenne ${optionalPct(signal.clv_signal.avg_clv)}, CLV positive ${optionalPct(signal.clv_signal.positive_clv_rate)}.`}
+          />
+        )}
+        {signal.market_signal && (
+          <StakeEvidenceLine
+            label="Marche"
+            value={signal.market_signal.verdict}
+            detail={signal.market_signal.reason}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StakeEvidenceLine({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">
+          {label}
+        </span>
+        <span className="text-[11px] text-gray-300">{value}</span>
+      </div>
+      <div className="text-[11px] text-gray-500 mt-1">{detail}</div>
+    </div>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="card">
@@ -590,6 +708,8 @@ function SingleCard({ single }: { single: RecommendationSingle }) {
           </div>
         ))}
       </div>
+
+      <StakeAdjustmentJournal signal={single.stake_adjustment} />
     </div>
   );
 }
@@ -628,6 +748,7 @@ function ParlayCard({ parlay }: { parlay: RecommendationParlay }) {
                 <StakeSignalBadge signal={leg.stake_adjustment} />
               </div>
             )}
+            <StakeAdjustmentJournal signal={leg.stake_adjustment} compact />
           </div>
         ))}
       </div>
