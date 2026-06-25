@@ -9,6 +9,7 @@ import {
   type MatchContext,
   type MatchParlayResponse,
   type EventOddsHistoryResponse,
+  type MarketSignal,
   type OddsMovement,
   type PlayerInsights,
 } from "@/lib/api";
@@ -399,6 +400,9 @@ function SuggestionCard({ suggestion }: { suggestion: BetSuggestion }) {
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
+        {suggestion.market_signal && (
+          <MarketSignalBadge signal={suggestion.market_signal} />
+        )}
         <span
           className={clsx(
             "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
@@ -526,6 +530,11 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
                     Probabilite modele {(leg.probability * 100).toFixed(1)}%
                     {" "}· {leg.source === "bookmaker" ? leg.bookmaker : "cote modele estimee"}
                   </div>
+                  {leg.market_signal && (
+                    <div className="mt-1">
+                      <MarketSignalBadge signal={leg.market_signal} />
+                    </div>
+                  )}
                 </div>
                 <div className="text-right font-bold text-cyan-300">
                   {formatOdds(displayedOdds(leg))}
@@ -550,6 +559,32 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
 function formatSignedPct(value?: number | null) {
   if (value == null || Number.isNaN(value)) return "n/a";
   return `${value > 0 ? "+" : ""}${(value * 100).toFixed(1)} pts`;
+}
+
+function MarketSignalBadge({ signal }: { signal: MarketSignal }) {
+  const label =
+    signal.verdict === "favorable"
+      ? "marche favorable"
+      : signal.verdict === "unfavorable"
+        ? "marche defavorable"
+        : signal.verdict === "insufficient"
+          ? "historique court"
+          : "marche stable";
+  return (
+    <span
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+        signal.verdict === "favorable"
+          ? "bg-green-900/40 text-green-300"
+          : signal.verdict === "unfavorable"
+            ? "bg-red-900/40 text-red-300"
+            : "bg-gray-800 text-gray-400",
+      )}
+      title={signal.reason}
+    >
+      {label}
+    </span>
+  );
 }
 
 function movementCopy(movement: OddsMovement) {

@@ -4,10 +4,12 @@ import type {
   MatchParlayRequest,
   MatchParlayResponse,
   BetSuggestion,
+  MarketSignal,
   OddsSnapshot,
   PlayerInsights,
 } from "@/lib/api";
 import { getMatch } from "@/lib/server/football-cloud";
+import { getEventOddsHistory } from "@/lib/server/history-cloud";
 import { getPlayerInsights } from "@/lib/server/player-cloud";
 import {
   EVENT_CORE_SOCCER_MARKETS,
@@ -19,6 +21,19 @@ import {
 } from "@/lib/server/odds-cloud";
 
 type Impact = BetSuggestion["risk_level"];
+
+interface OddsMovementSignal {
+  market: string;
+  selection: string;
+  bookmaker: string;
+  point?: number | null;
+  opening_price: number;
+  latest_price: number;
+  implied_prob_delta?: number | null;
+  direction: "shortening" | "drifting" | "stable";
+  signal_strength: "low" | "medium" | "high";
+  observations: number;
+}
 
 function round(value: number, decimals = 4) {
   return Number(value.toFixed(decimals));
@@ -321,6 +336,213 @@ function makeSuggestion(input: {
 
 function oddsForSuggestion(suggestion: BetSuggestion) {
   return suggestion.offered_odds || suggestion.fair_odds;
+}
+
+function marketKeyForSuggestion(suggestion: BetSuggestion) {
+  const market = suggestion.market.toLowerCase();
+  if (market === "1n2") return "h2h";
+  if (market.includes("total buts")) return "totals";
+  if (market.includes("handicap")) return "spreads";
+  if (market.includes("deux equipes")) return "btts";
+  if (market.includes("rembourse")) return "draw_no_bet";
+  if (market.includes("buteur")) return "player_goal_scorer_anytime";
+  if (market.includes("passe decisive")) return "player_assists";
+  if (market.includes("tir cadre") || market.includes("tirs cadres")) {
+    return "player_shots_on_target";
+  }
+  if (market.includes("carton joueur")) return "player_to_receive_card";
+  return null;
+}
+
+function extractLine(value: string) {
+  const match = value.match(/(-?\d+(?:[.,]\d+)?)/);
+  return match ? Number(match[1].replace(",", ".")) : null;
+}
+
+function pointMatches(left?: number | null, right?: number | null) {
+  if (left == null || right == null) return true;
+  return Math.abs(Number(left) - Number(right)) < 0.01;
+}
+
+function stripOutcomeWords(value: string) {
+  return value
+    .replace(/\b(over|under|yes|no|oui|non)\b/gi, "")
+    .replace(/\bplus de\b|\bmoins de\b/gi, "")
+    .trim();
+}
+
+function selectionMatchesSuggestion(
+  movement: OddsMovementSignal,
+  suggestion: BetSuggestion,
+) {
+  const market = movement.market;
+  if (market.startsWith("player_")) {
+    return sameEntity(stripOutcomeWords(movement.selection), suggestion.selection);
+  }
+  if (market === "totals") {
+    const wantsOver =
+      suggestion.selection.toLowerCase().includes("plus") ||
+      suggestion.selection.toLowerCase().includes("over");
+    const wantsUnder =
+      suggestion.selection.toLowerCase().includes("moins") ||
+      suggestion.selection.toLowerCase().includes("under");
+    return (
+      ((wantsOver && movement.selection === "Over") ||
+        (wantsUnder && movement.selection === "Under")) &&
+      pointMatches(movement.point, extractLine(suggestion.selection))
+    );
+  }
+  if (market === "btts") {
+    const wantsYes =
+      suggestion.selection.toLowerCase().includes("oui") ||
+      suggestion.label.toLowerCase().includes("marquent");
+    const wantsNo =
+      suggestion.selection.toLowerCase().includes("non") ||
+      suggestion.label.toLowerCase().includes("ne marque pas");
+    return (
+      (wantsYes && movement.selection === "Yes") ||
+      (wantsNo && movement.selection === "No")
+    );
+  }
+  if (market === "spreads") {
+    return (
+      sameEntity(movement.selection, suggestion.selection) &&
+      pointMatches(movement.point, extractLine(suggestion.selection))
+    );
+  }
+  return sameEntity(movement.selection, suggestion.selection);
+}
+
+function signalFromMovement(movement: OddsMovementSignal): MarketSignal {
+  const enoughHistory = movement.observations >= 2;
+  if (!enoughHistory) {
+    return {
+      verdict: "insufficient",
+      direction: "stable",
+      signal_strength: "low",
+      reason: "Historique marche encore court: signal neutre.",
+      score_adjustment: 0,
+      opening_price: movement.opening_price,
+      latest_price: movement.latest_price,
+      implied_prob_delta: movement.implied_prob_delta,
+      observations: movement.observations,
+    };
+  }
+
+  if (movement.direction === "shortening") {
+    const adjustment =
+      movement.signal_strength === "high"
+        ? 7
+        : movement.signal_strength === "medium"
+          ? 4
+          : 1.5;
+    return {
+      verdict: "favorable",
+      direction: movement.direction,
+      signal_strength: movement.signal_strength,
+      reason: `Signal marche favorable: cote ${movement.opening_price.toFixed(2)} -> ${movement.latest_price.toFixed(2)}.`,
+      score_adjustment: adjustment,
+      opening_price: movement.opening_price,
+      latest_price: movement.latest_price,
+      implied_prob_delta: movement.implied_prob_delta,
+      observations: movement.observations,
+    };
+  }
+
+  if (movement.direction === "drifting") {
+    const adjustment =
+      movement.signal_strength === "high"
+        ? -9
+        : movement.signal_strength === "medium"
+          ? -5
+          : -2;
+    return {
+      verdict: "unfavorable",
+      direction: movement.direction,
+      signal_strength: movement.signal_strength,
+      reason: `Signal marche defavorable: cote ${movement.opening_price.toFixed(2)} -> ${movement.latest_price.toFixed(2)}.`,
+      score_adjustment: adjustment,
+      opening_price: movement.opening_price,
+      latest_price: movement.latest_price,
+      implied_prob_delta: movement.implied_prob_delta,
+      observations: movement.observations,
+    };
+  }
+
+  return {
+    verdict: "neutral",
+    direction: "stable",
+    signal_strength: "low",
+    reason: "Cote stable dans l'historique disponible.",
+    score_adjustment: 0,
+    opening_price: movement.opening_price,
+    latest_price: movement.latest_price,
+    implied_prob_delta: movement.implied_prob_delta,
+    observations: movement.observations,
+  };
+}
+
+function findMovementForSuggestion(
+  suggestion: BetSuggestion,
+  movements: OddsMovementSignal[],
+) {
+  if (!suggestion.bookmaker) return null;
+  const marketKey = marketKeyForSuggestion(suggestion);
+  if (!marketKey) return null;
+  return (
+    movements.find(
+      (movement) =>
+        movement.market === marketKey &&
+        sameEntity(movement.bookmaker, suggestion.bookmaker) &&
+        selectionMatchesSuggestion(movement, suggestion),
+    ) || null
+  );
+}
+
+function applyMarketSignalsToSuggestions(
+  suggestions: BetSuggestion[],
+  movements: OddsMovementSignal[],
+) {
+  return suggestions
+    .map((suggestion) => {
+      const movement = findMovementForSuggestion(suggestion, movements);
+      if (!movement) return suggestion;
+      const marketSignal = signalFromMovement(movement);
+      const dataNote = [suggestion.data_note, marketSignal.reason]
+        .filter(Boolean)
+        .join(" ");
+      return {
+        ...suggestion,
+        market_signal: marketSignal,
+        data_note: dataNote || suggestion.data_note,
+        tags:
+          marketSignal.verdict === "unfavorable" &&
+          marketSignal.signal_strength !== "low"
+            ? [...suggestion.tags, "market_adverse"]
+            : marketSignal.verdict === "favorable"
+              ? [...suggestion.tags, "market_supported"]
+              : suggestion.tags,
+      };
+    })
+    .sort((a, b) => {
+      const aEdge = a.edge ?? -0.2;
+      const bEdge = b.edge ?? -0.2;
+      return (
+        bEdge +
+        b.probability * 0.4 +
+        (b.market_signal?.score_adjustment || 0) / 100 -
+        (aEdge +
+          a.probability * 0.4 +
+          (a.market_signal?.score_adjustment || 0) / 100)
+      );
+    });
+}
+
+function hasAdverseMarketSignal(suggestion: BetSuggestion) {
+  return (
+    suggestion.market_signal?.verdict === "unfavorable" &&
+    suggestion.market_signal.signal_strength !== "low"
+  );
 }
 
 function buildSuggestions(
@@ -1243,6 +1465,7 @@ function buildSameMatchParlay(
         suggestion.probability >= 0.32 &&
         suggestion.confidence !== "low" &&
         suggestion.data_level !== "proxy" &&
+        !hasAdverseMarketSignal(suggestion) &&
         !suggestion.tags.includes("exact_score") &&
         !suggestion.tags.includes("proxy_model") &&
         !suggestion.tags.includes("high_variance"),
@@ -1331,7 +1554,19 @@ export async function getMatchBetBuilder(
     ...serializeOdds(oddsEvent),
     ...additionalOdds.flatMap((eventOdds) => serializeOdds(eventOdds)),
   ];
-  const suggestions = buildSuggestions(event, players, snapshots);
+  const oddsHistory = await getEventOddsHistory(eventId, {
+    includeBase: true,
+    limit: 3000,
+  }).catch(() => null);
+  const movements = Array.isArray(
+    (oddsHistory as { movements?: OddsMovementSignal[] } | null)?.movements,
+  )
+    ? ((oddsHistory as { movements?: OddsMovementSignal[] }).movements || [])
+    : [];
+  const suggestions = applyMarketSignalsToSuggestions(
+    buildSuggestions(event, players, snapshots),
+    movements,
+  );
 
   return {
     event_id: eventId,

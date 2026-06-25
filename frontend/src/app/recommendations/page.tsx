@@ -16,6 +16,7 @@ import { clsx } from "clsx";
 import { DataFreshnessCard } from "@/components/DataFreshnessCard";
 import {
   api,
+  type MarketSignal,
   type MarketRadarResponse,
   type MarketRadarSuggestion,
   type RecommendationParlay,
@@ -397,6 +398,9 @@ function RadarCard({ suggestion }: { suggestion: MarketRadarSuggestion }) {
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
+        {suggestion.market_signal && (
+          <MarketSignalBadge signal={suggestion.market_signal} />
+        )}
         <DataLevelBadge level={suggestion.data_level} />
         <span className="text-[10px] text-gray-600">Risque {suggestion.risk_level}</span>
         <span className="text-[10px] text-gray-600">Conf. {suggestion.confidence}</span>
@@ -421,6 +425,32 @@ function DataLevelBadge({ level }: { level: MarketRadarSuggestion["data_level"] 
       )}
     >
       {level === "bookmaker" ? "cote bookmaker" : level === "proxy" ? "proxy" : "modele"}
+    </span>
+  );
+}
+
+function MarketSignalBadge({ signal }: { signal: MarketSignal }) {
+  const label =
+    signal.verdict === "favorable"
+      ? "marche favorable"
+      : signal.verdict === "unfavorable"
+        ? "marche defavorable"
+        : signal.verdict === "insufficient"
+          ? "historique court"
+          : "marche stable";
+  return (
+    <span
+      title={signal.reason}
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+        signal.verdict === "favorable"
+          ? "bg-green-900/40 text-green-300"
+          : signal.verdict === "unfavorable"
+            ? "bg-red-900/40 text-red-300"
+            : "bg-gray-800 text-gray-400",
+      )}
+    >
+      {label}
     </span>
   );
 }
@@ -469,6 +499,9 @@ function SingleCard({ single }: { single: RecommendationSingle }) {
             <span className="rounded-xl bg-gray-800 px-2.5 py-1 text-xs text-gray-400">
               {single.confidence}
             </span>
+            {single.market_signal && (
+              <MarketSignalBadge signal={single.market_signal} />
+            )}
           </div>
           <Link href={`/analyse/${single.event_id}`} className="font-bold text-white mt-3 block hover:text-green-300">
             {single.match}
@@ -521,6 +554,11 @@ function ParlayCard({ parlay }: { parlay: RecommendationParlay }) {
             <div className="text-xs text-green-400 mt-1">
               Edge +{pct(leg.edge)} - modele {pct(leg.model_prob)}
             </div>
+            {leg.market_signal && (
+              <div className="mt-2">
+                <MarketSignalBadge signal={leg.market_signal} />
+              </div>
+            )}
           </div>
         ))}
       </div>

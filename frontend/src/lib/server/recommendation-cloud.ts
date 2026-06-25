@@ -1,6 +1,7 @@
-import type { BetSuggestion, Event, ValueBet } from "@/lib/api";
+import type { BetSuggestion, Event, MarketSignal, ValueBet } from "@/lib/api";
 import { getMatchBetBuilder } from "@/lib/server/bet-builder-cloud";
 import { getUpcomingMatches } from "@/lib/server/football-cloud";
+import { getEventOddsHistory } from "@/lib/server/history-cloud";
 
 type RiskLevel = "prudent" | "balanced" | "aggressive";
 
@@ -29,6 +30,20 @@ interface CandidateBet extends ValueBet {
   reasons: string[];
   warnings: string[];
   decision: "consider" | "avoid";
+  market_signal?: MarketSignal;
+}
+
+interface OddsMovementSignal {
+  market: string;
+  selection: string;
+  bookmaker: string;
+  point?: number | null;
+  opening_price: number;
+  latest_price: number;
+  implied_prob_delta?: number | null;
+  direction: "shortening" | "drifting" | "stable";
+  signal_strength: "low" | "medium" | "high";
+  observations: number;
 }
 
 interface ParlayCore {
@@ -114,6 +129,150 @@ function marketLabel(market: string) {
   return market;
 }
 
+function normalize(value: string | null | undefined) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function sameEntity(a?: string | null, b?: string | null) {
+  const left = normalize(a);
+  const right = normalize(b);
+  if (!left || !right) return false;
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function samePoint(left?: number | null, right?: number | null) {
+  if (left == null || right == null) return true;
+  return Math.abs(Number(left) - Number(right)) < 0.01;
+}
+
+function signalFromMovement(movement: OddsMovementSignal): MarketSignal {
+  if (movement.observations < 2) {
+    return {
+      verdict: "insufficient",
+      direction: "stable",
+      signal_strength: "low",
+      reason: "Historique marche encore court: signal neutre.",
+      score_adjustment: 0,
+      opening_price: movement.opening_price,
+      latest_price: movement.latest_price,
+      implied_prob_delta: movement.implied_prob_delta,
+      observations: movement.observations,
+    };
+  }
+
+  if (movement.direction === "shortening") {
+    const adjustment =
+      movement.signal_strength === "high"
+        ? 8
+        : movement.signal_strength === "medium"
+          ? 5
+          : 2;
+    return {
+      verdict: "favorable",
+      direction: movement.direction,
+      signal_strength: movement.signal_strength,
+      reason: `Signal marche favorable: cote ${movement.opening_price.toFixed(2)} -> ${movement.latest_price.toFixed(2)}.`,
+      score_adjustment: adjustment,
+      opening_price: movement.opening_price,
+      latest_price: movement.latest_price,
+      implied_prob_delta: movement.implied_prob_delta,
+      observations: movement.observations,
+    };
+  }
+
+  if (movement.direction === "drifting") {
+    const adjustment =
+      movement.signal_strength === "high"
+        ? -10
+        : movement.signal_strength === "medium"
+          ? -6
+          : -2;
+    return {
+      verdict: "unfavorable",
+      direction: movement.direction,
+      signal_strength: movement.signal_strength,
+      reason: `Signal marche defavorable: cote ${movement.opening_price.toFixed(2)} -> ${movement.latest_price.toFixed(2)}.`,
+      score_adjustment: adjustment,
+      opening_price: movement.opening_price,
+      latest_price: movement.latest_price,
+      implied_prob_delta: movement.implied_prob_delta,
+      observations: movement.observations,
+    };
+  }
+
+  return {
+    verdict: "neutral",
+    direction: "stable",
+    signal_strength: "low",
+    reason: "Cote stable dans l'historique disponible.",
+    score_adjustment: 0,
+    opening_price: movement.opening_price,
+    latest_price: movement.latest_price,
+    implied_prob_delta: movement.implied_prob_delta,
+    observations: movement.observations,
+  };
+}
+
+function movementMatchesBet(movement: OddsMovementSignal, bet: ValueBet) {
+  if (movement.market !== bet.market) return false;
+  if (!sameEntity(movement.bookmaker, bet.bookmaker)) return false;
+  if (!samePoint(movement.point, bet.point)) return false;
+  if (bet.market === "totals") {
+    return normalize(movement.selection) === normalize(bet.selection);
+  }
+  return sameEntity(movement.selection, bet.selection);
+}
+
+function applyMarketSignal(
+  candidate: CandidateBet,
+  movements: OddsMovementSignal[],
+) {
+  const movement = movements.find((item) => movementMatchesBet(item, candidate));
+  if (!movement) return candidate;
+  const marketSignal = signalFromMovement(movement);
+  const score = clamp(candidate.score + marketSignal.score_adjustment, 0, 100);
+  const reasons =
+    marketSignal.verdict === "favorable"
+      ? [...candidate.reasons, marketSignal.reason]
+      : candidate.reasons;
+  const warnings =
+    marketSignal.verdict === "unfavorable"
+      ? [...candidate.warnings, marketSignal.reason]
+      : candidate.warnings;
+
+  return {
+    ...candidate,
+    score: Number(score.toFixed(1)),
+    reasons,
+    warnings,
+    market_signal: marketSignal,
+  };
+}
+
+async function loadMarketMovements(events: Event[]) {
+  const settled = await Promise.allSettled(
+    events.map((event) =>
+      getEventOddsHistory(event.id, {
+        includeBase: true,
+        limit: 3000,
+      }),
+    ),
+  );
+  const byEvent = new Map<number, OddsMovementSignal[]>();
+  settled.forEach((result, index) => {
+    if (result.status !== "fulfilled") return;
+    const movements = (result.value as { movements?: OddsMovementSignal[] }).movements;
+    if (Array.isArray(movements)) {
+      byEvent.set(events[index].id, movements);
+    }
+  });
+  return byEvent;
+}
+
 function varianceRisk(bet: ValueBet): RiskLevel {
   if (bet.odds <= 2.2 && bet.model_prob >= 0.5) return "prudent";
   if (bet.odds <= 4 && bet.model_prob >= 0.34) return "balanced";
@@ -183,6 +342,13 @@ function passesRisk(candidate: CandidateBet, risk: RiskLevel, minOdds: number, m
   if (candidate.odds < minOdds || candidate.odds > oddsLimit) return false;
   if (candidate.edge < config.minEdge || candidate.ev <= 0) return false;
   if (candidate.model_prob < config.minProb) return false;
+  if (
+    risk === "prudent" &&
+    candidate.market_signal?.verdict === "unfavorable" &&
+    candidate.market_signal.signal_strength !== "low"
+  ) {
+    return false;
+  }
   if (risk === "prudent" && candidate.risk_level !== "prudent") return false;
   if (risk === "balanced" && candidate.risk_level === "aggressive") return false;
   if (!config.allowLowConfidence && candidate.confidence === "low") return false;
@@ -203,7 +369,14 @@ function buildParlay(
   const config = riskConfig(risk);
   const maxLegs = Math.min(input.max_legs, config.maxLegs);
   const pool = candidates
-    .filter((candidate) => candidate.model_prob >= config.minProb)
+    .filter(
+      (candidate) =>
+        candidate.model_prob >= config.minProb &&
+        !(
+          candidate.market_signal?.verdict === "unfavorable" &&
+          candidate.market_signal.signal_strength !== "low"
+        ),
+    )
     .sort((a, b) => b.score - a.score)
     .slice(0, 20);
 
@@ -277,12 +450,13 @@ function avoidReason(event: Event) {
 
 function radarScore(suggestion: BetSuggestion) {
   const edgeBoost = suggestion.edge ? Math.max(-8, suggestion.edge * 260) : 0;
+  const marketSignalBoost = suggestion.market_signal?.score_adjustment || 0;
   const confidenceBoost =
     suggestion.confidence === "high" ? 10 : suggestion.confidence === "medium" ? 4 : -8;
   const riskPenalty =
     suggestion.risk_level === "aggressive" ? 9 : suggestion.risk_level === "balanced" ? 2 : 0;
   const score =
-    (suggestion.probability * 92 + edgeBoost + confidenceBoost - riskPenalty) *
+    (suggestion.probability * 92 + edgeBoost + confidenceBoost + marketSignalBoost - riskPenalty) *
     sourceWeight(suggestion);
   return Number(clamp(score, 0, 100).toFixed(1));
 }
@@ -345,6 +519,7 @@ export async function getMarketRadar(input: MarketRadarInput = {}) {
         score: radarScore(suggestion),
         rationale: suggestion.rationale,
         data_note: suggestion.data_note || radarReason(suggestion),
+        market_signal: suggestion.market_signal,
       }));
   });
 
@@ -394,9 +569,13 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
   const hours = clamp(Number(input.hours || 168), 1, 24 * 30);
 
   const events = await getUpcomingMatches(hours);
+  const movementsByEvent = await loadMarketMovements(events);
   const allCandidates = events.flatMap((event) =>
     (event.prediction?.value_bets || []).map((bet) =>
-      buildCandidate(event, bet, { bankroll, stake }, risk),
+      applyMarketSignal(
+        buildCandidate(event, bet, { bankroll, stake }, risk),
+        movementsByEvent.get(event.id) || [],
+      ),
     ),
   );
 
@@ -457,6 +636,7 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
       potential_return: candidate.potential_return,
       reasons: candidate.reasons,
       warnings: candidate.warnings,
+      market_signal: candidate.market_signal,
     })),
     parlays: parlay
       ? [
@@ -473,6 +653,7 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
               model_prob: leg.model_prob,
               edge: leg.edge,
               score: leg.score,
+              market_signal: leg.market_signal,
             })),
           },
         ]

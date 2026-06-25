@@ -188,6 +188,19 @@ export interface BetSuggestion {
   data_note?: string;
   conflict_key: string;
   tags: string[];
+  market_signal?: MarketSignal;
+}
+
+export interface MarketSignal {
+  verdict: "favorable" | "unfavorable" | "neutral" | "insufficient";
+  direction: "shortening" | "drifting" | "stable";
+  signal_strength: "low" | "medium" | "high";
+  reason: string;
+  score_adjustment: number;
+  opening_price?: number;
+  latest_price?: number;
+  implied_prob_delta?: number | null;
+  observations?: number;
 }
 
 export interface MatchBetBuilder {
@@ -335,6 +348,7 @@ export interface RecommendationSingle {
   potential_return: number;
   reasons: string[];
   warnings: string[];
+  market_signal?: MarketSignal;
 }
 
 export interface RecommendationParlay {
@@ -349,6 +363,7 @@ export interface RecommendationParlay {
     model_prob: number;
     edge: number;
     score: number;
+    market_signal?: MarketSignal;
   }>;
   total_odds: number;
   theoretical_probability: number;
@@ -407,6 +422,7 @@ export interface MarketRadarSuggestion {
   score: number;
   rationale: string;
   data_note: string;
+  market_signal?: MarketSignal;
 }
 
 export interface MarketRadarResponse {
