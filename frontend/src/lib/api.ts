@@ -203,6 +203,21 @@ export interface MarketSignal {
   observations?: number;
 }
 
+export interface CalibrationSignal {
+  scope: "market" | "global";
+  market?: string | null;
+  bucket: number;
+  label: string;
+  sample_size: number;
+  avg_probability: number;
+  actual_rate: number;
+  calibration_error: number;
+  verdict: "reliable" | "overconfident" | "underconfident" | "insufficient";
+  signal_strength: "low" | "medium" | "high";
+  score_adjustment: number;
+  reason: string;
+}
+
 export interface MatchBetBuilder {
   event_id: number;
   generated_at: string;
@@ -349,6 +364,7 @@ export interface RecommendationSingle {
   reasons: string[];
   warnings: string[];
   market_signal?: MarketSignal;
+  calibration_signal?: CalibrationSignal;
 }
 
 export interface RecommendationParlay {
@@ -364,6 +380,7 @@ export interface RecommendationParlay {
     edge: number;
     score: number;
     market_signal?: MarketSignal;
+    calibration_signal?: CalibrationSignal;
   }>;
   total_odds: number;
   theoretical_probability: number;
@@ -383,6 +400,7 @@ export interface RecommendationResponse {
     recommended_singles: number;
     avoided_events: number;
     parlay_available: boolean;
+    calibration_adjusted?: number;
   };
   singles: RecommendationSingle[];
   parlays: RecommendationParlay[];

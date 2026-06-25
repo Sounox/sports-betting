@@ -1,7 +1,17 @@
-import type { BetSuggestion, Event, MarketSignal, ValueBet } from "@/lib/api";
+import type {
+  BetSuggestion,
+  CalibrationSignal,
+  Event,
+  MarketSignal,
+  ValueBet,
+} from "@/lib/api";
 import { getMatchBetBuilder } from "@/lib/server/bet-builder-cloud";
 import { getUpcomingMatches } from "@/lib/server/football-cloud";
-import { getEventOddsHistory } from "@/lib/server/history-cloud";
+import {
+  getEventOddsHistory,
+  getRecommendationCalibrationProfile,
+  type RecommendationCalibrationSignal,
+} from "@/lib/server/history-cloud";
 
 type RiskLevel = "prudent" | "balanced" | "aggressive";
 
@@ -31,6 +41,7 @@ interface CandidateBet extends ValueBet {
   warnings: string[];
   decision: "consider" | "avoid";
   market_signal?: MarketSignal;
+  calibration_signal?: CalibrationSignal;
 }
 
 interface OddsMovementSignal {
@@ -58,6 +69,11 @@ interface ParlayResult extends ParlayCore {
   potential_return: number;
   risk_level: RiskLevel;
   warnings: string[];
+}
+
+interface CalibrationProfile {
+  global: Map<number, RecommendationCalibrationSignal>;
+  market: Map<string, RecommendationCalibrationSignal>;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -273,6 +289,75 @@ async function loadMarketMovements(events: Event[]) {
   return byEvent;
 }
 
+function probabilityBucket(probability: number) {
+  return Math.min(9, Math.max(0, Math.floor(Math.max(0, Math.min(0.9999, probability)) * 10)));
+}
+
+function calibrationKey(market: string, bucket: number) {
+  return `${normalize(market)}:${bucket}`;
+}
+
+async function loadCalibrationProfile(): Promise<CalibrationProfile> {
+  try {
+    const profile = await getRecommendationCalibrationProfile();
+    const global = new Map<number, RecommendationCalibrationSignal>();
+    const market = new Map<string, RecommendationCalibrationSignal>();
+    for (const bucket of profile.buckets || []) {
+      if (bucket.scope === "global") {
+        global.set(bucket.bucket, bucket);
+      } else if (bucket.market) {
+        market.set(calibrationKey(bucket.market, bucket.bucket), bucket);
+      }
+    }
+    return { global, market };
+  } catch {
+    return { global: new Map(), market: new Map() };
+  }
+}
+
+function chooseCalibrationSignal(
+  candidate: CandidateBet,
+  profile: CalibrationProfile,
+) {
+  const bucket = probabilityBucket(candidate.model_prob);
+  const marketSignal = profile.market.get(calibrationKey(candidate.market, bucket));
+  if (marketSignal && marketSignal.sample_size >= 8) return marketSignal;
+  return profile.global.get(bucket) || null;
+}
+
+function applyCalibrationSignal(
+  candidate: CandidateBet,
+  profile: CalibrationProfile,
+) {
+  const signal = chooseCalibrationSignal(candidate, profile);
+  if (!signal || signal.verdict === "insufficient") return candidate;
+
+  const score = clamp(candidate.score + signal.score_adjustment, 0, 100);
+  const reasons =
+    signal.verdict === "underconfident" || signal.verdict === "reliable"
+      ? [...candidate.reasons, signal.reason]
+      : candidate.reasons;
+  const warnings =
+    signal.verdict === "overconfident"
+      ? [...candidate.warnings, signal.reason]
+      : candidate.warnings;
+
+  return {
+    ...candidate,
+    score: Number(score.toFixed(1)),
+    reasons,
+    warnings,
+    calibration_signal: signal,
+  };
+}
+
+function hasAdverseCalibration(candidate: CandidateBet) {
+  return (
+    candidate.calibration_signal?.verdict === "overconfident" &&
+    candidate.calibration_signal.signal_strength !== "low"
+  );
+}
+
 function varianceRisk(bet: ValueBet): RiskLevel {
   if (bet.odds <= 2.2 && bet.model_prob >= 0.5) return "prudent";
   if (bet.odds <= 4 && bet.model_prob >= 0.34) return "balanced";
@@ -349,6 +434,7 @@ function passesRisk(candidate: CandidateBet, risk: RiskLevel, minOdds: number, m
   ) {
     return false;
   }
+  if (risk === "prudent" && hasAdverseCalibration(candidate)) return false;
   if (risk === "prudent" && candidate.risk_level !== "prudent") return false;
   if (risk === "balanced" && candidate.risk_level === "aggressive") return false;
   if (!config.allowLowConfidence && candidate.confidence === "low") return false;
@@ -375,7 +461,8 @@ function buildParlay(
         !(
           candidate.market_signal?.verdict === "unfavorable" &&
           candidate.market_signal.signal_strength !== "low"
-        ),
+        ) &&
+        !hasAdverseCalibration(candidate),
     )
     .sort((a, b) => b.score - a.score)
     .slice(0, 20);
@@ -569,12 +656,18 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
   const hours = clamp(Number(input.hours || 168), 1, 24 * 30);
 
   const events = await getUpcomingMatches(hours);
-  const movementsByEvent = await loadMarketMovements(events);
+  const [movementsByEvent, calibrationProfile] = await Promise.all([
+    loadMarketMovements(events),
+    loadCalibrationProfile(),
+  ]);
   const allCandidates = events.flatMap((event) =>
     (event.prediction?.value_bets || []).map((bet) =>
-      applyMarketSignal(
-        buildCandidate(event, bet, { bankroll, stake }, risk),
-        movementsByEvent.get(event.id) || [],
+      applyCalibrationSignal(
+        applyMarketSignal(
+          buildCandidate(event, bet, { bankroll, stake }, risk),
+          movementsByEvent.get(event.id) || [],
+        ),
+        calibrationProfile,
       ),
     ),
   );
@@ -614,6 +707,11 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
       recommended_singles: singles.length,
       avoided_events: avoid.length,
       parlay_available: Boolean(parlay),
+      calibration_adjusted: allCandidates.filter(
+        (candidate) =>
+          candidate.calibration_signal &&
+          candidate.calibration_signal.verdict !== "insufficient",
+      ).length,
     },
     singles: singles.map((candidate) => ({
       event_id: candidate.event_id,
@@ -637,6 +735,7 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
       reasons: candidate.reasons,
       warnings: candidate.warnings,
       market_signal: candidate.market_signal,
+      calibration_signal: candidate.calibration_signal,
     })),
     parlays: parlay
       ? [
@@ -654,6 +753,7 @@ export async function getDailyRecommendations(input: RecommendationInput = {}) {
               edge: leg.edge,
               score: leg.score,
               market_signal: leg.market_signal,
+              calibration_signal: leg.calibration_signal,
             })),
           },
         ]

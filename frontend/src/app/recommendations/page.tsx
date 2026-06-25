@@ -16,6 +16,7 @@ import { clsx } from "clsx";
 import { DataFreshnessCard } from "@/components/DataFreshnessCard";
 import {
   api,
+  type CalibrationSignal,
   type MarketSignal,
   type MarketRadarResponse,
   type MarketRadarSuggestion,
@@ -259,11 +260,12 @@ function NumberField({
 
 function SummaryGrid({ data }: { data: RecommendationResponse }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
       <Metric label="Matchs analyses" value={String(data.summary.upcoming_events)} />
       <Metric label="Value bets vues" value={String(data.summary.value_bets_considered)} />
       <Metric label="Simples retenus" value={String(data.summary.recommended_singles)} />
       <Metric label="Combine" value={data.summary.parlay_available ? "Oui" : "Non"} />
+      <Metric label="Calibration" value={String(data.summary.calibration_adjusted || 0)} />
       <Metric label="Risque" value={data.filters.risk_level} />
     </div>
   );
@@ -455,6 +457,34 @@ function MarketSignalBadge({ signal }: { signal: MarketSignal }) {
   );
 }
 
+function CalibrationSignalBadge({ signal }: { signal: CalibrationSignal }) {
+  const label =
+    signal.verdict === "overconfident"
+      ? "modele trop confiant"
+      : signal.verdict === "underconfident"
+        ? "modele prudent"
+        : signal.verdict === "reliable"
+          ? "calibration ok"
+          : "calibration courte";
+  return (
+    <span
+      title={signal.reason}
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+        signal.verdict === "overconfident"
+          ? "bg-orange-900/45 text-orange-300"
+          : signal.verdict === "underconfident"
+            ? "bg-cyan-900/40 text-cyan-300"
+            : signal.verdict === "reliable"
+              ? "bg-blue-900/40 text-blue-300"
+              : "bg-gray-800 text-gray-400",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="card">
@@ -502,6 +532,9 @@ function SingleCard({ single }: { single: RecommendationSingle }) {
             {single.market_signal && (
               <MarketSignalBadge signal={single.market_signal} />
             )}
+            {single.calibration_signal && (
+              <CalibrationSignalBadge signal={single.calibration_signal} />
+            )}
           </div>
           <Link href={`/analyse/${single.event_id}`} className="font-bold text-white mt-3 block hover:text-green-300">
             {single.match}
@@ -520,12 +553,12 @@ function SingleCard({ single }: { single: RecommendationSingle }) {
       </div>
 
       <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
-        {single.reasons.slice(0, 2).map((reason, index) => (
+        {single.reasons.slice(0, 3).map((reason, index) => (
           <div key={index} className="text-xs text-green-200/70 bg-green-950/20 border border-green-900/40 rounded-lg p-2">
             {reason}
           </div>
         ))}
-        {single.warnings.slice(0, 2).map((warning, index) => (
+        {single.warnings.slice(0, 3).map((warning, index) => (
           <div key={index} className="text-xs text-yellow-200/70 bg-yellow-950/20 border border-yellow-900/40 rounded-lg p-2">
             {warning}
           </div>
@@ -557,6 +590,11 @@ function ParlayCard({ parlay }: { parlay: RecommendationParlay }) {
             {leg.market_signal && (
               <div className="mt-2">
                 <MarketSignalBadge signal={leg.market_signal} />
+              </div>
+            )}
+            {leg.calibration_signal && (
+              <div className="mt-2">
+                <CalibrationSignalBadge signal={leg.calibration_signal} />
               </div>
             )}
           </div>

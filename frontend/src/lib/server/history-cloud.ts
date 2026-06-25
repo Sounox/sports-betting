@@ -168,6 +168,21 @@ interface BacktestInput {
   closingSource?: string | null;
 }
 
+export interface RecommendationCalibrationSignal {
+  scope: "market" | "global";
+  market?: string | null;
+  bucket: number;
+  label: string;
+  sample_size: number;
+  avg_probability: number;
+  actual_rate: number;
+  calibration_error: number;
+  verdict: "reliable" | "overconfident" | "underconfident" | "insufficient";
+  signal_strength: "low" | "medium" | "high";
+  score_adjustment: number;
+  reason: string;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
   event_id INTEGER PRIMARY KEY,
@@ -370,6 +385,10 @@ const OPTIONAL_MIGRATIONS = [
 
 function json(value: unknown) {
   return JSON.stringify(value ?? null);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function getDb(): D1Database | null {
@@ -1333,6 +1352,152 @@ function uniqueLatestValueBets(rows: ValueBetSnapshotRow[]) {
     latest.push({ ...row, point: line });
   }
   return latest;
+}
+
+function probabilityBucket(probability: number) {
+  return Math.min(9, Math.max(0, Math.floor(Math.max(0, Math.min(0.9999, probability)) * 10)));
+}
+
+function bucketLabel(bucket: number) {
+  return `${bucket * 10}-${(bucket + 1) * 10}%`;
+}
+
+function calibrationSignalFromStats(input: {
+  scope: "market" | "global";
+  market?: string | null;
+  bucket: number;
+  count: number;
+  probSum: number;
+  wins: number;
+}): RecommendationCalibrationSignal {
+  const avgProbability = input.count ? input.probSum / input.count : 0;
+  const actualRate = input.count ? input.wins / input.count : 0;
+  const error = actualRate - avgProbability;
+  const signalStrength =
+    input.count >= 20 && Math.abs(error) >= 0.15
+      ? "high"
+      : input.count >= 8 && Math.abs(error) >= 0.08
+        ? "medium"
+        : "low";
+  const verdict =
+    input.count < 8
+      ? "insufficient"
+      : error <= -0.08
+        ? "overconfident"
+        : error >= 0.08
+          ? "underconfident"
+          : "reliable";
+  const shrink = Math.sqrt(input.count / (input.count + 20));
+  const rawAdjustment =
+    verdict === "insufficient" ? 0 : clamp(error * 80 * shrink, -12, 8);
+  const scoreAdjustment = Number(rawAdjustment.toFixed(1));
+  const label = bucketLabel(input.bucket);
+  const scopeLabel =
+    input.scope === "market" && input.market
+      ? `marche ${marketDisplayLabel(input.market)}`
+      : "tous marches";
+
+  let reason = `Calibration ${scopeLabel} ${label}: ${input.count} cas, modele ${(avgProbability * 100).toFixed(1)}%, reel ${(actualRate * 100).toFixed(1)}%.`;
+  if (verdict === "overconfident") {
+    reason += " Penalite: le modele a ete trop confiant sur cette tranche.";
+  } else if (verdict === "underconfident") {
+    reason += " Bonus prudent: le modele a ete trop conservateur sur cette tranche.";
+  } else if (verdict === "insufficient") {
+    reason += " Historique trop court: aucun ajustement fort.";
+  } else {
+    reason += " Calibration correcte: ajustement faible.";
+  }
+
+  return {
+    scope: input.scope,
+    market: input.market ?? null,
+    bucket: input.bucket,
+    label,
+    sample_size: input.count,
+    avg_probability: Number(avgProbability.toFixed(4)),
+    actual_rate: Number(actualRate.toFixed(4)),
+    calibration_error: Number(error.toFixed(4)),
+    verdict,
+    signal_strength: signalStrength,
+    score_adjustment: scoreAdjustment,
+    reason,
+  };
+}
+
+export async function getRecommendationCalibrationProfile() {
+  const db = getDb();
+  if (!db) {
+    return { ...unavailableStatus(), buckets: [] as RecommendationCalibrationSignal[] };
+  }
+  await ensureSchema(db);
+
+  const rows = await db
+    .prepare(
+      `SELECT market, model_prob, result
+       FROM backtest_results
+       WHERE source = 'value_bet'
+         AND model_prob IS NOT NULL
+         AND result IN ('won', 'lost')
+       LIMIT 5000`,
+    )
+    .all<{
+      market: string;
+      model_prob: number;
+      result: "won" | "lost";
+    }>();
+
+  const global = new Map<number, { count: number; probSum: number; wins: number }>();
+  const byMarket = new Map<string, { count: number; probSum: number; wins: number }>();
+
+  for (const row of rows.results || []) {
+    const probability = Number(row.model_prob || 0);
+    const bucket = probabilityBucket(probability);
+    const won = row.result === "won" ? 1 : 0;
+    const globalStats = global.get(bucket) || { count: 0, probSum: 0, wins: 0 };
+    globalStats.count += 1;
+    globalStats.probSum += probability;
+    globalStats.wins += won;
+    global.set(bucket, globalStats);
+
+    const market = row.market || "unknown";
+    const marketKey = `${normalize(market)}:${bucket}`;
+    const marketStats = byMarket.get(marketKey) || { count: 0, probSum: 0, wins: 0 };
+    marketStats.count += 1;
+    marketStats.probSum += probability;
+    marketStats.wins += won;
+    byMarket.set(marketKey, marketStats);
+  }
+
+  const buckets: RecommendationCalibrationSignal[] = [];
+  for (const [bucket, stats] of global.entries()) {
+    buckets.push(
+      calibrationSignalFromStats({
+        scope: "global",
+        bucket,
+        ...stats,
+      }),
+    );
+  }
+  for (const [key, stats] of byMarket.entries()) {
+    const [marketKey, bucketRaw] = key.split(":");
+    buckets.push(
+      calibrationSignalFromStats({
+        scope: "market",
+        market: marketKey,
+        bucket: Number(bucketRaw),
+        ...stats,
+      }),
+    );
+  }
+
+  return {
+    enabled: true,
+    generated_at: new Date().toISOString(),
+    samples: rows.results.length,
+    buckets,
+    note:
+      "Ajustements conservateurs: les signaux de calibration modifient le score, mais ne remplacent pas la probabilite modele.",
+  };
 }
 
 export async function settleBacktestingResults() {
