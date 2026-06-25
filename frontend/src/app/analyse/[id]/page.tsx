@@ -1,4 +1,5 @@
 "use client";
+import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import {
@@ -13,7 +14,7 @@ import {
   type OddsMovement,
   type PlayerInsights,
 } from "@/lib/api";
-import { AlertTriangle, Loader2, RefreshCw, TrendingUp, Calculator, Target, BarChart2, ChevronDown, ChevronUp, Users, Sparkles, ExternalLink } from "lucide-react";
+import { AlertTriangle, Loader2, RefreshCw, TrendingUp, Calculator, Target, BarChart2, ChevronDown, ChevronUp, Users, Sparkles, ExternalLink, ShieldCheck, Gauge, Activity } from "lucide-react";
 import { clsx } from "clsx";
 
 export default function AnalysePage() {
@@ -74,7 +75,7 @@ export default function AnalysePage() {
   const lambda = markets?.lambda;
 
   return (
-    <div className="space-y-5 max-w-4xl">
+    <div className="space-y-5 max-w-7xl">
       {/* Header match */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
@@ -132,6 +133,16 @@ export default function AnalysePage() {
       </div>
 
       {/* Stats marchés */}
+      {pred && (
+        <MatchCommandCenter
+          event={event}
+          builder={betBuilder}
+          context={matchContext}
+          history={oddsHistory}
+          insights={playerInsights}
+        />
+      )}
+
       {markets && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Over / Under */}
@@ -267,6 +278,289 @@ export default function AnalysePage() {
 }
 
 /* ── Calculateur de paris ───────────────────────────────────────── */
+function pct(value?: number | null, digits = 1) {
+  if (value == null || Number.isNaN(value)) return "n/a";
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+function bestOutcome(event: Event) {
+  const pred = event.prediction;
+  if (!pred) return null;
+  return [
+    { label: event.home_team, key: "Domicile", probability: pred.prob_home },
+    { label: "Match nul", key: "Nul", probability: pred.prob_draw },
+    { label: event.away_team, key: "Exterieur", probability: pred.prob_away },
+  ].sort((a, b) => b.probability - a.probability)[0];
+}
+
+function topPlayableSuggestions(builder?: MatchBetBuilder | null) {
+  if (!builder) return [];
+  return [...builder.suggestions]
+    .filter((suggestion) => {
+      if (suggestion.category === "Score exact") return false;
+      if (suggestion.data_level === "proxy") return false;
+      if (suggestion.offered_odds && (suggestion.edge || 0) > 0) return true;
+      return suggestion.source === "model" && suggestion.probability >= 0.52;
+    })
+    .sort((a, b) => {
+      const edgeDelta = (b.edge || 0) - (a.edge || 0);
+      if (Math.abs(edgeDelta) > 0.005) return edgeDelta;
+      return b.probability - a.probability;
+    })
+    .slice(0, 5);
+}
+
+function topPlayerHighlights(insights?: PlayerInsights | null) {
+  return (insights?.players || [])
+    .filter((player) => player.anytime_scorer_probability > 0.08 || player.assist_probability > 0.08)
+    .sort(
+      (a, b) =>
+        b.anytime_scorer_probability +
+        b.assist_probability -
+        (a.anytime_scorer_probability + a.assist_probability),
+    )
+    .slice(0, 4);
+}
+
+function topOddsMoves(history?: EventOddsHistoryResponse | null) {
+  return (history?.movements || [])
+    .slice()
+    .sort((a, b) => {
+      const playerA = a.market.startsWith("player_") ? 0.04 : 0;
+      const playerB = b.market.startsWith("player_") ? 0.04 : 0;
+      return Math.abs(b.implied_prob_delta || b.price_delta_pct || 0) + playerB -
+        (Math.abs(a.implied_prob_delta || a.price_delta_pct || 0) + playerA);
+    })
+    .slice(0, 4);
+}
+
+function MatchCommandCenter({
+  event,
+  builder,
+  context,
+  history,
+  insights,
+}: {
+  event: Event;
+  builder: MatchBetBuilder | null;
+  context: MatchContext | null;
+  history: EventOddsHistoryResponse | null;
+  insights: PlayerInsights | null;
+}) {
+  const pred = event.prediction;
+  if (!pred) return null;
+  const markets = pred.markets || {};
+  const favorite = bestOutcome(event);
+  const playable = topPlayableSuggestions(builder);
+  const playerHighlights = topPlayerHighlights(insights);
+  const marketMoves = topOddsMoves(history);
+  const topScore = markets.top_scores?.[0];
+  const bttsYes = markets.btts?.yes;
+  const over25 = markets.over_under?.over_2_5;
+  const totalGoals =
+    markets.lambda?.home != null && markets.lambda?.away != null
+      ? Number(markets.lambda.home) + Number(markets.lambda.away)
+      : null;
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.85fr] gap-4">
+      <div className="card overflow-hidden border-emerald-900/40 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.12),transparent_32%),rgba(17,24,39,0.85)]">
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-emerald-300">
+              <Gauge size={14} />
+              Lecture rapide du match
+            </div>
+            <h2 className="mt-2 text-2xl font-black tracking-tight text-white">
+              {favorite ? `${favorite.label} en tete du modele` : "Analyse probabiliste"}
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-gray-400">
+              Synthese lisible des probabilites, du contexte IA, des cotes et des donnees joueurs. Rien ici ne garantit un resultat: le role de l'outil est de filtrer le risque.
+            </p>
+          </div>
+          <div className="grid grid-cols-3 gap-2 lg:min-w-[330px]">
+            <Stat label={event.home_team} value={pct(pred.prob_home, 0)} highlight={favorite?.key === "Domicile" ? "green" : undefined} />
+            <Stat label="Nul" value={pct(pred.prob_draw, 0)} />
+            <Stat label={event.away_team} value={pct(pred.prob_away, 0)} highlight={favorite?.key === "Exterieur" ? "green" : undefined} />
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
+          <DecisionTile
+            label="Favori modele"
+            value={favorite?.label || "n/a"}
+            detail={favorite ? `${pct(favorite.probability)} de probabilite` : "Prediction indisponible"}
+          />
+          <DecisionTile
+            label="Total attendu"
+            value={totalGoals == null ? "n/a" : totalGoals.toFixed(2)}
+            detail={over25 == null ? "Over 2.5 non calcule" : `Over 2.5 a ${pct(over25)}`}
+          />
+          <DecisionTile
+            label="BTTS"
+            value={bttsYes == null ? "n/a" : pct(bttsYes, 0)}
+            detail={bttsYes == null ? "Non calcule" : bttsYes >= 0.52 ? "Scenario ouvert" : "Scenario plus ferme"}
+          />
+          <DecisionTile
+            label="Score modal"
+            value={topScore?.score || "n/a"}
+            detail={topScore ? `${pct(topScore.probability ?? topScore.prob)} du modele` : "Score exact non calcule"}
+          />
+        </div>
+
+        {context && (
+          <div className="mt-4 rounded-xl border border-cyan-900/40 bg-cyan-950/15 p-3">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-cyan-300">
+              <Sparkles size={13} />
+              Contexte IA
+            </div>
+            <p className="mt-2 text-sm text-gray-300 line-clamp-3">{context.summary}</p>
+          </div>
+        )}
+      </div>
+
+      <div className="card space-y-3 border-green-900/40 bg-green-950/10">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-white flex items-center gap-2">
+              <ShieldCheck size={16} className="text-green-400" />
+              Paris les plus propres
+            </h3>
+            <p className="text-xs text-gray-500 mt-1">Selectionne par edge, cote et risque.</p>
+          </div>
+          <span className="rounded-full bg-gray-800 px-2 py-1 text-[11px] text-gray-400">
+            {playable.length} idee(s)
+          </span>
+        </div>
+
+        {playable.length === 0 ? (
+          <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4 text-sm text-gray-500">
+            Aucun pari assez propre pour etre mis en avant. Le match reste analysable, mais pas force.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {playable.map((suggestion) => (
+              <QuickPick key={suggestion.id} suggestion={suggestion} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <SideInsight title="Joueurs a surveiller" icon={<Users size={15} className="text-emerald-300" />}>
+        {playerHighlights.length ? (
+          playerHighlights.map((player) => (
+            <div key={player.player_id} className="rounded-xl bg-gray-900/75 border border-gray-800 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-white text-sm">{player.player}</div>
+                  <div className="text-xs text-gray-500">{player.team} - {player.position}</div>
+                </div>
+                <span className="text-xs font-bold text-green-300">{pct(player.anytime_scorer_probability)}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                <Stat label="Buteur" value={pct(player.anytime_scorer_probability)} />
+                <Stat label="Passe" value={pct(player.assist_probability)} />
+                <Stat label="Double" value={pct(player.brace_probability)} />
+              </div>
+            </div>
+          ))
+        ) : (
+          <EmptyMini text="Pas encore assez de donnees joueurs fiables." />
+        )}
+      </SideInsight>
+
+      <SideInsight title="Marche en mouvement" icon={<Activity size={15} className="text-indigo-300" />}>
+        {marketMoves.length ? (
+          marketMoves.map((movement) => (
+            <div key={`${movement.market}:${movement.bookmaker}:${movement.selection}:${movement.point ?? ""}`} className="rounded-xl bg-gray-900/75 border border-gray-800 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs text-gray-500">{movement.market_label}</div>
+                  <div className="font-semibold text-white text-sm truncate">{movement.selection}</div>
+                  <div className="text-xs text-gray-600">{movement.bookmaker}</div>
+                </div>
+                <MarketDirectionPill movement={movement} />
+              </div>
+              <div className="mt-2 text-xs text-gray-500">
+                {formatOdds(movement.opening_price)} {"->"} {formatOdds(movement.latest_price)} - {movement.observations} obs.
+              </div>
+            </div>
+          ))
+        ) : (
+          <EmptyMini text="Les prochains refreshs rempliront les mouvements." />
+        )}
+      </SideInsight>
+    </div>
+  );
+}
+
+function DecisionTile({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-3">
+      <div className="text-[11px] uppercase tracking-wide text-gray-500">{label}</div>
+      <div className="mt-1 text-lg font-black text-white truncate">{value}</div>
+      <div className="mt-1 text-xs text-gray-500">{detail}</div>
+    </div>
+  );
+}
+
+function QuickPick({ suggestion }: { suggestion: BetSuggestion }) {
+  const playable = suggestion.source === "bookmaker" && suggestion.offered_odds;
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-900/80 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-semibold text-white text-sm truncate">{suggestion.label}</div>
+          <div className="text-xs text-gray-500 mt-0.5">{suggestion.category} - {suggestion.risk_level}</div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="font-black text-green-300">{formatOdds(playable ? suggestion.offered_odds : suggestion.fair_odds)}</div>
+          <div className="text-[11px] text-gray-500">{pct(suggestion.probability)}</div>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {suggestion.edge != null && (
+          <span className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", suggestion.edge > 0 ? "bg-green-900/40 text-green-300" : "bg-red-900/40 text-red-300")}>
+            Edge {suggestion.edge > 0 ? "+" : ""}{pct(suggestion.edge)}
+          </span>
+        )}
+        {suggestion.market_signal && <MarketSignalBadge signal={suggestion.market_signal} />}
+      </div>
+    </div>
+  );
+}
+
+function SideInsight({ title, icon, children }: { title: string; icon: ReactNode; children: ReactNode }) {
+  return (
+    <div className="card space-y-3">
+      <h3 className="font-semibold text-white flex items-center gap-2">
+        {icon}
+        {title}
+      </h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-2">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function EmptyMini({ text }: { text: string }) {
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4 text-sm text-gray-500">
+      {text}
+    </div>
+  );
+}
+
+function MarketDirectionPill({ movement }: { movement: OddsMovement }) {
+  const copy = movementCopy(movement);
+  return (
+    <span className={clsx("shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold", copy.className)}>
+      {copy.label}
+    </span>
+  );
+}
+
 function formatOdds(value?: number) {
   if (!value) return "Cote modele";
   return `Cote ${value.toFixed(2)}`;
