@@ -9,6 +9,11 @@ function pct(value?: number | null) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function signedPct(value?: number | null) {
+  if (value == null) return "-";
+  return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(1)}%`;
+}
+
 function num(value?: number | null, digits = 3) {
   if (value == null) return "-";
   return value.toFixed(digits);
@@ -145,6 +150,25 @@ export default function PerformancePage() {
               value={pct(summary.flat_stake_yield)}
               className={(summary.flat_stake_yield || 0) >= 0 ? "text-green-400" : "text-red-400"}
             />
+            <Metric
+              icon={<TrendingUp size={18} />}
+              label="CLV moyenne"
+              value={signedPct(summary.avg_clv)}
+              hint={`${summary.clv_count || 0} value bets avec cote de cloture`}
+              className={(summary.avg_clv || 0) >= 0 ? "text-green-400" : "text-red-400"}
+            />
+            <Metric
+              icon={<Target size={18} />}
+              label="CLV positive"
+              value={pct(summary.positive_clv_rate)}
+              hint="Part des paris pris avant que la cote baisse"
+            />
+            <Metric
+              icon={<BarChart2 size={18} />}
+              label="Cote cloture moy."
+              value={num(summary.avg_closing_odds, 2)}
+              hint="Derniere cote observee avant match"
+            />
           </div>
 
           <div className="card">
@@ -179,6 +203,7 @@ export default function PerformancePage() {
                     <th className="py-2 pr-3 text-right">Profit flat</th>
                     <th className="py-2 pr-3 text-right">Yield</th>
                     <th className="py-2 text-right">Prob. moy.</th>
+                    <th className="py-2 text-right">CLV</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -197,6 +222,46 @@ export default function PerformancePage() {
                         {pct(row.flat_yield)}
                       </td>
                       <td className="py-2 text-right">{pct(row.avg_model_prob)}</td>
+                      <td className={`py-2 text-right ${(row.avg_clv || 0) >= 0 ? "text-green-400" : "text-red-400"}`}>
+                        {row.clv_count ? signedPct(row.avg_clv) : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="card overflow-x-auto">
+            <h2 className="font-semibold text-white mb-2">Calibration des probabilites</h2>
+            <p className="text-xs text-gray-500 mb-3">
+              Compare les probabilites annoncees avec le taux de reussite observe. Une erreur proche de 0 indique un modele plus honnete.
+            </p>
+            {(summary.calibration || []).length === 0 ? (
+              <p className="text-sm text-gray-500">
+                Pas encore assez de predictions settlees pour afficher une calibration.
+              </p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                    <th className="py-2 pr-3">Tranche</th>
+                    <th className="py-2 pr-3 text-right">Volume</th>
+                    <th className="py-2 pr-3 text-right">Proba moy.</th>
+                    <th className="py-2 pr-3 text-right">Reussite reelle</th>
+                    <th className="py-2 text-right">Ecart</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(summary.calibration || []).map((bucket) => (
+                    <tr key={bucket.bucket} className="border-b border-gray-900 text-gray-300">
+                      <td className="py-2 pr-3">{bucket.label}</td>
+                      <td className="py-2 pr-3 text-right">{bucket.count}</td>
+                      <td className="py-2 pr-3 text-right">{pct(bucket.avg_probability)}</td>
+                      <td className="py-2 pr-3 text-right">{pct(bucket.actual_rate)}</td>
+                      <td className={`py-2 text-right ${Math.abs(bucket.calibration_error) <= 0.05 ? "text-green-400" : "text-yellow-400"}`}>
+                        {signedPct(bucket.calibration_error)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

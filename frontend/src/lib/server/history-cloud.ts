@@ -161,6 +161,11 @@ interface BacktestInput {
   ev?: number | null;
   confidence?: string | null;
   dataQuality?: string | null;
+  closingOdds?: number | null;
+  closingFairProb?: number | null;
+  closingCapturedAt?: string | null;
+  clv?: number | null;
+  closingSource?: string | null;
 }
 
 const SCHEMA = `
@@ -334,6 +339,11 @@ CREATE TABLE IF NOT EXISTS backtest_results (
   ev REAL,
   confidence TEXT,
   data_quality TEXT,
+  closing_odds REAL,
+  closing_fair_prob REAL,
+  closing_captured_at TEXT,
+  clv REAL,
+  closing_source TEXT,
   result TEXT NOT NULL,
   profit_flat REAL,
   home_score INTEGER NOT NULL,
@@ -349,6 +359,14 @@ CREATE INDEX IF NOT EXISTS idx_backtest_source_market
 `;
 
 let schemaReady = false;
+
+const OPTIONAL_MIGRATIONS = [
+  "ALTER TABLE backtest_results ADD COLUMN closing_odds REAL",
+  "ALTER TABLE backtest_results ADD COLUMN closing_fair_prob REAL",
+  "ALTER TABLE backtest_results ADD COLUMN closing_captured_at TEXT",
+  "ALTER TABLE backtest_results ADD COLUMN clv REAL",
+  "ALTER TABLE backtest_results ADD COLUMN closing_source TEXT",
+];
 
 function json(value: unknown) {
   return JSON.stringify(value ?? null);
@@ -375,6 +393,19 @@ async function ensureSchema(db: D1Database) {
     .map((statement) => db.prepare(statement));
   for (let i = 0; i < statements.length; i += 20) {
     await db.batch(statements.slice(i, i + 20));
+  }
+  for (const migration of OPTIONAL_MIGRATIONS) {
+    try {
+      await db.prepare(migration).run();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        !message.toLowerCase().includes("duplicate column") &&
+        !message.toLowerCase().includes("already exists")
+      ) {
+        throw error;
+      }
+    }
   }
   schemaReady = true;
 }
@@ -1093,6 +1124,60 @@ function profitFlat(result: string, odds: number | null | undefined) {
   return null;
 }
 
+function sameLine(left: number | null | undefined, right: number | null | undefined) {
+  if (left == null && right == null) return true;
+  if (left == null || right == null) return false;
+  return Math.abs(Number(left) - Number(right)) < 0.01;
+}
+
+function closingLineValue(
+  entryOdds: number | null | undefined,
+  closingOdds: number | null | undefined,
+) {
+  const entry = Number(entryOdds || 0);
+  const closing = Number(closingOdds || 0);
+  if (entry <= 1 || closing <= 1) return null;
+  return entry / closing - 1;
+}
+
+async function findClosingOddsForValueBet(
+  db: D1Database,
+  row: ValueBetSnapshotRow,
+) {
+  if (!row.market || !row.selection || !row.scheduled_at) return null;
+  const line = row.point ?? parseLineFromText(row.label);
+  const candidates = await db
+    .prepare(
+      `SELECT * FROM odds_price_snapshots
+       WHERE event_id = ?
+         AND market = ?
+         AND captured_at <= ?
+       ORDER BY captured_at DESC
+       LIMIT 500`,
+    )
+    .bind(row.event_id, row.market, row.scheduled_at)
+    .all<OddsPriceSnapshotRow>();
+
+  const matched = (candidates.results || []).filter(
+    (candidate) =>
+      normalize(candidate.selection) === normalize(row.selection) &&
+      sameLine(candidate.point, line),
+  );
+  const sameBookmaker = matched.find(
+    (candidate) => normalize(candidate.bookmaker) === normalize(row.bookmaker),
+  );
+  const closing = sameBookmaker || matched[0];
+  if (!closing) return null;
+
+  return {
+    closingOdds: Number(closing.price),
+    closingFairProb: closing.fair_prob,
+    closingCapturedAt: closing.captured_at,
+    clv: closingLineValue(row.odds, closing.price),
+    closingSource: sameBookmaker ? "same_bookmaker" : "market_proxy",
+  };
+}
+
 function backtestStatement(db: D1Database, input: BacktestInput, settledAt: string) {
   const result = settleMarket(input);
   return {
@@ -1103,8 +1188,9 @@ function backtestStatement(db: D1Database, input: BacktestInput, settledAt: stri
           event_id, source, prediction_snapshot_id, value_bet_snapshot_id,
           captured_at, scheduled_at, settled_at, market, selection, line,
           model_prob, odds, bookmaker, edge, ev, confidence, data_quality,
-          result, profit_flat, home_score, away_score, winner
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          closing_odds, closing_fair_prob, closing_captured_at, clv,
+          closing_source, result, profit_flat, home_score, away_score, winner
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         input.event.event_id,
@@ -1124,6 +1210,11 @@ function backtestStatement(db: D1Database, input: BacktestInput, settledAt: stri
         input.ev ?? null,
         input.confidence ?? null,
         input.dataQuality ?? null,
+        input.closingOdds ?? null,
+        input.closingFairProb ?? null,
+        input.closingCapturedAt ?? null,
+        input.clv ?? null,
+        input.closingSource ?? null,
         result,
         profitFlat(result, input.odds),
         input.event.home_score,
@@ -1339,6 +1430,7 @@ export async function settleBacktestingResults() {
         .all<ValueBetSnapshotRow>();
 
       for (const row of uniqueLatestValueBets(valueRows.results)) {
+        const closing = await findClosingOddsForValueBet(db, row);
         const input: BacktestInput = {
           source: "value_bet",
           event: finishedEvent,
@@ -1353,6 +1445,11 @@ export async function settleBacktestingResults() {
           bookmaker: row.bookmaker,
           edge: row.edge,
           ev: row.ev,
+          closingOdds: closing?.closingOdds ?? null,
+          closingFairProb: closing?.closingFairProb ?? null,
+          closingCapturedAt: closing?.closingCapturedAt ?? null,
+          clv: closing?.clv ?? null,
+          closingSource: closing?.closingSource ?? null,
         };
         const { result, statement } = backtestStatement(db, input, settledAt);
         if (result !== "void") {
@@ -1661,7 +1758,10 @@ export async function getPerformanceSummary() {
          SUM(CASE WHEN result = 'push' THEN 1 ELSE 0 END) AS push,
          SUM(CASE WHEN profit_flat IS NOT NULL THEN profit_flat ELSE 0 END) AS flat_profit,
          SUM(CASE WHEN profit_flat IS NOT NULL THEN 1 ELSE 0 END) AS flat_count,
-         AVG(model_prob) AS avg_model_prob
+         AVG(model_prob) AS avg_model_prob,
+         AVG(clv) AS avg_clv,
+         SUM(CASE WHEN clv IS NOT NULL THEN 1 ELSE 0 END) AS clv_count,
+         SUM(CASE WHEN clv > 0 THEN 1 ELSE 0 END) AS positive_clv
        FROM backtest_results
        WHERE result IN ('won', 'lost', 'push')
        GROUP BY source, market
@@ -1677,7 +1777,72 @@ export async function getPerformanceSummary() {
       flat_profit: number;
       flat_count: number;
       avg_model_prob: number | null;
+      avg_clv: number | null;
+      clv_count: number;
+      positive_clv: number;
     }>();
+
+  const clvSummary = await db
+    .prepare(
+      `SELECT
+         COUNT(*) AS clv_count,
+         AVG(clv) AS avg_clv,
+         AVG(closing_odds) AS avg_closing_odds,
+         SUM(CASE WHEN clv > 0 THEN 1 ELSE 0 END) AS positive_clv
+       FROM backtest_results
+       WHERE source = 'value_bet'
+         AND clv IS NOT NULL`,
+    )
+    .first<{
+      clv_count: number;
+      avg_clv: number | null;
+      avg_closing_odds: number | null;
+      positive_clv: number;
+    }>();
+
+  const calibrationRows = await db
+    .prepare(
+      `SELECT source, market, model_prob, result
+       FROM backtest_results
+       WHERE model_prob IS NOT NULL
+         AND result IN ('won', 'lost')
+       LIMIT 5000`,
+    )
+    .all<{
+      source: "prediction" | "value_bet";
+      market: string;
+      model_prob: number;
+      result: "won" | "lost";
+    }>();
+
+  const calibrationBuckets = Array.from({ length: 10 }, (_, index) => ({
+    bucket: index,
+    label: `${index * 10}-${(index + 1) * 10}%`,
+    count: 0,
+    probSum: 0,
+    wins: 0,
+  }));
+  for (const row of calibrationRows.results) {
+    const probability = Math.max(0, Math.min(0.9999, Number(row.model_prob || 0)));
+    const bucket = Math.min(9, Math.floor(probability * 10));
+    calibrationBuckets[bucket].count += 1;
+    calibrationBuckets[bucket].probSum += probability;
+    calibrationBuckets[bucket].wins += row.result === "won" ? 1 : 0;
+  }
+  const calibration = calibrationBuckets
+    .filter((bucket) => bucket.count > 0)
+    .map((bucket) => {
+      const avgProb = bucket.probSum / bucket.count;
+      const actualRate = bucket.wins / bucket.count;
+      return {
+        bucket: bucket.bucket,
+        label: bucket.label,
+        count: bucket.count,
+        avg_probability: Number(avgProb.toFixed(4)),
+        actual_rate: Number(actualRate.toFixed(4)),
+        calibration_error: Number((actualRate - avgProb).toFixed(4)),
+      };
+    });
 
   const marketBreakdown = marketRows.results.map((row) => {
     const decided = Number(row.won || 0) + Number(row.lost || 0);
@@ -1694,6 +1859,11 @@ export async function getPerformanceSummary() {
       flat_yield: flatCount ? Number(row.flat_profit || 0) / flatCount : null,
       avg_model_prob:
         row.avg_model_prob == null ? null : Number(row.avg_model_prob),
+      avg_clv: row.avg_clv == null ? null : Number(row.avg_clv),
+      clv_count: Number(row.clv_count || 0),
+      positive_clv_rate: Number(row.clv_count || 0)
+        ? Number(row.positive_clv || 0) / Number(row.clv_count || 0)
+        : null,
     };
   });
   const predictionMarketsSettled = marketBreakdown
@@ -1730,6 +1900,19 @@ export async function getPerformanceSummary() {
         ? (flatProfitFromBacktest || flatProfit) /
           (settledValueBetsFromBacktest || settledValueBets)
         : null,
+    clv_count: Number(clvSummary?.clv_count || 0),
+    avg_clv:
+      clvSummary?.avg_clv == null ? null : Number(clvSummary.avg_clv),
+    positive_clv_rate:
+      Number(clvSummary?.clv_count || 0) > 0
+        ? Number(clvSummary?.positive_clv || 0) /
+          Number(clvSummary?.clv_count || 0)
+        : null,
+    avg_closing_odds:
+      clvSummary?.avg_closing_odds == null
+        ? null
+        : Number(clvSummary.avg_closing_odds),
+    calibration,
     latest_settlement: latestSettlement,
     market_breakdown: marketBreakdown,
     note:

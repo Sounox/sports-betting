@@ -600,6 +600,11 @@ export interface PerformanceSummary {
   flat_stake_yield?: number | null;
   events_evaluated?: number;
   prediction_markets_settled?: number;
+  clv_count?: number;
+  avg_clv?: number | null;
+  positive_clv_rate?: number | null;
+  avg_closing_odds?: number | null;
+  calibration?: CalibrationBucket[];
   latest_settlement?: SettlementRun | null;
   market_breakdown?: MarketPerformance[];
   note?: string;
@@ -680,4 +685,16 @@ export interface MarketPerformance {
   flat_profit: number;
   flat_yield: number | null;
   avg_model_prob: number | null;
+  avg_clv?: number | null;
+  clv_count?: number;
+  positive_clv_rate?: number | null;
+}
+
+export interface CalibrationBucket {
+  bucket: number;
+  label: string;
+  count: number;
+  avg_probability: number;
+  actual_rate: number;
+  calibration_error: number;
 }
