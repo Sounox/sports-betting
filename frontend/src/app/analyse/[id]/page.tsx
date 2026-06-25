@@ -584,8 +584,33 @@ function isFrenchBookmakerName(bookmaker?: string) {
   return /(winamax|betclic|unibet \(fr\)|pmu|parions)/i.test(bookmaker);
 }
 
+type OddsScope = "fr" | "book" | "model";
+
+function suggestionMatchesScope(suggestion: BetSuggestion, scope: OddsScope) {
+  if (scope === "fr") {
+    return suggestion.source === "bookmaker" && isFrenchBookmakerName(suggestion.bookmaker);
+  }
+  if (scope === "book") {
+    return suggestion.source === "bookmaker";
+  }
+  return suggestion.source !== "bookmaker";
+}
+
 function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
-  const grouped = builder.suggestions.reduce<Record<string, BetSuggestion[]>>(
+  const [oddsScope, setOddsScope] = useState<OddsScope>("fr");
+  const frCount = builder.suggestions.filter((suggestion) =>
+    suggestionMatchesScope(suggestion, "fr"),
+  ).length;
+  const bookCount = builder.suggestions.filter((suggestion) =>
+    suggestionMatchesScope(suggestion, "book"),
+  ).length;
+  const modelCount = builder.suggestions.filter((suggestion) =>
+    suggestionMatchesScope(suggestion, "model"),
+  ).length;
+  const visibleSuggestions = builder.suggestions.filter((suggestion) =>
+    suggestionMatchesScope(suggestion, oddsScope),
+  );
+  const grouped = visibleSuggestions.reduce<Record<string, BetSuggestion[]>>(
     (acc, suggestion) => {
       acc[suggestion.category] = acc[suggestion.category] || [];
       acc[suggestion.category].push(suggestion);
@@ -635,8 +660,34 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
         ))}
       </div>
 
+      <div className="flex flex-col gap-2 rounded-2xl border border-gray-800 bg-gray-950/60 p-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+            Source des cotes affichees
+          </div>
+          <div className="text-[11px] text-gray-600 mt-1">
+            Par defaut, l'outil colle aux books disponibles en France. Les autres cotes restent consultables.
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <FilterPill active={oddsScope === "fr"} onClick={() => setOddsScope("fr")}>
+            Cotes FR ({frCount})
+          </FilterPill>
+          <FilterPill active={oddsScope === "book"} onClick={() => setOddsScope("book")}>
+            Toutes cotes ({bookCount})
+          </FilterPill>
+          <FilterPill active={oddsScope === "model"} onClick={() => setOddsScope("model")}>
+            Modele/proxy ({modelCount})
+          </FilterPill>
+        </div>
+      </div>
+
       <div className="space-y-4">
-        {categoryOrder
+        {visibleSuggestions.length === 0 ? (
+          <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4 text-sm text-gray-500">
+            Aucune selection disponible dans ce filtre. Passe sur "Toutes cotes" ou "Modele/proxy" pour voir les autres signaux.
+          </div>
+        ) : categoryOrder
           .filter((category) => grouped[category]?.length)
           .map((category) => (
             <div key={category}>
@@ -660,6 +711,31 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function FilterPill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={clsx(
+        "rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+        active
+          ? "border-emerald-500/70 bg-emerald-500/15 text-emerald-200"
+          : "border-gray-800 bg-gray-900 text-gray-500 hover:border-gray-700 hover:text-gray-300",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

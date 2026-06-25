@@ -282,6 +282,23 @@ function SummaryGrid({ data }: { data: RecommendationResponse }) {
   );
 }
 
+type OddsScope = "fr" | "book" | "model";
+
+function isFrenchBookmakerName(bookmaker?: string) {
+  if (!bookmaker) return false;
+  return /(winamax|betclic|unibet \(fr\)|pmu|parions)/i.test(bookmaker);
+}
+
+function radarMatchesScope(suggestion: MarketRadarSuggestion, scope: OddsScope) {
+  if (scope === "fr") {
+    return suggestion.source === "bookmaker" && isFrenchBookmakerName(suggestion.bookmaker);
+  }
+  if (scope === "book") {
+    return suggestion.source === "bookmaker";
+  }
+  return suggestion.source !== "bookmaker";
+}
+
 function MarketRadarPanel({
   radar,
   loading,
@@ -289,7 +306,15 @@ function MarketRadarPanel({
   radar: MarketRadarResponse | null;
   loading: boolean;
 }) {
-  const grouped = (radar?.suggestions || []).reduce<Record<string, MarketRadarSuggestion[]>>(
+  const [oddsScope, setOddsScope] = useState<OddsScope>("fr");
+  const suggestions = radar?.suggestions || [];
+  const frCount = suggestions.filter((suggestion) => radarMatchesScope(suggestion, "fr")).length;
+  const bookCount = suggestions.filter((suggestion) => radarMatchesScope(suggestion, "book")).length;
+  const modelCount = suggestions.filter((suggestion) => radarMatchesScope(suggestion, "model")).length;
+  const visibleSuggestions = suggestions.filter((suggestion) =>
+    radarMatchesScope(suggestion, oddsScope),
+  );
+  const grouped = visibleSuggestions.reduce<Record<string, MarketRadarSuggestion[]>>(
     (acc, suggestion) => {
       acc[suggestion.category] = acc[suggestion.category] || [];
       acc[suggestion.category].push(suggestion);
@@ -332,6 +357,30 @@ function MarketRadarPanel({
         </div>
       </div>
 
+      {radar && radar.suggestions.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-2xl border border-emerald-900/40 bg-gray-950/50 p-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
+              Source des cotes
+            </div>
+            <div className="text-[11px] text-gray-600 mt-1">
+              Cotes FR pour coller aux apps francaises; toutes cotes pour comparer le marche global.
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <FilterPill active={oddsScope === "fr"} onClick={() => setOddsScope("fr")}>
+              Cotes FR ({frCount})
+            </FilterPill>
+            <FilterPill active={oddsScope === "book"} onClick={() => setOddsScope("book")}>
+              Toutes cotes ({bookCount})
+            </FilterPill>
+            <FilterPill active={oddsScope === "model"} onClick={() => setOddsScope("model")}>
+              Modele/proxy ({modelCount})
+            </FilterPill>
+          </div>
+        </div>
+      )}
+
       {loading && (
         <div className="rounded-xl bg-gray-900/80 border border-gray-800 p-4 text-sm text-gray-400 flex items-center gap-2">
           <Loader2 size={16} className="animate-spin" />
@@ -343,7 +392,11 @@ function MarketRadarPanel({
         <EmptyState text="Aucun signal joueur/scenario exploitable sur les prochains matchs." />
       )}
 
-      {!loading && radar && radar.suggestions.length > 0 && (
+      {!loading && radar && radar.suggestions.length > 0 && visibleSuggestions.length === 0 && (
+        <EmptyState text="Aucun signal dans ce filtre. Passe sur toutes les cotes ou modele/proxy pour elargir." />
+      )}
+
+      {!loading && radar && radar.suggestions.length > 0 && visibleSuggestions.length > 0 && (
         <div className="space-y-5">
           {order
             .filter((category) => grouped[category]?.length)
@@ -376,6 +429,31 @@ function MarketRadarPanel({
         </div>
       )}
     </div>
+  );
+}
+
+function FilterPill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={clsx(
+        "rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+        active
+          ? "border-emerald-500/70 bg-emerald-500/15 text-emerald-200"
+          : "border-gray-800 bg-gray-900 text-gray-500 hover:border-gray-700 hover:text-gray-300",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
