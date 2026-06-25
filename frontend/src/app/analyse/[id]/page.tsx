@@ -11,6 +11,7 @@ import {
   type MatchParlayResponse,
   type EventOddsHistoryResponse,
   type MarketSignal,
+  type MatchMarketCatalogEntry,
   type OddsMovement,
   type PlayerInsights,
 } from "@/lib/api";
@@ -631,6 +632,7 @@ function isFrenchSuggestion(suggestion: BetSuggestion) {
 }
 
 type OddsScope = "fr" | "book" | "model";
+type CatalogScope = "all" | "fr" | "book" | "model";
 
 function suggestionMatchesScope(suggestion: BetSuggestion, scope: OddsScope) {
   if (scope === "fr") {
@@ -640,6 +642,17 @@ function suggestionMatchesScope(suggestion: BetSuggestion, scope: OddsScope) {
     return suggestion.source === "bookmaker";
   }
   return suggestion.source !== "bookmaker";
+}
+
+function catalogMatchesScope(entry: MatchMarketCatalogEntry, scope: CatalogScope) {
+  if (scope === "fr") return entry.status === "fr_available";
+  if (scope === "book") {
+    return entry.status === "fr_available" || entry.status === "global_available";
+  }
+  if (scope === "model") {
+    return entry.status === "model_only" || entry.status === "proxy_only";
+  }
+  return true;
 }
 
 function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
@@ -735,6 +748,10 @@ function BetSuggestionsPanel({ builder }: { builder: MatchBetBuilder }) {
         </div>
       )}
 
+      {builder.market_catalog && builder.market_catalog.length > 0 && (
+        <MarketCatalogPanel catalog={builder.market_catalog} />
+      )}
+
       <div className="flex flex-col gap-2 rounded-2xl border border-gray-800 bg-gray-950/60 p-3 md:flex-row md:items-center md:justify-between">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
@@ -819,6 +836,147 @@ function FilterPill({
     >
       {children}
     </button>
+  );
+}
+
+function MarketCatalogPanel({ catalog }: { catalog: MatchMarketCatalogEntry[] }) {
+  const [scope, setScope] = useState<CatalogScope>("all");
+  const frCount = catalog.filter((entry) => catalogMatchesScope(entry, "fr")).length;
+  const bookCount = catalog.filter((entry) => catalogMatchesScope(entry, "book")).length;
+  const modelCount = catalog.filter((entry) => catalogMatchesScope(entry, "model")).length;
+  const visible = catalog.filter((entry) => catalogMatchesScope(entry, scope));
+
+  return (
+    <div className="rounded-2xl border border-cyan-900/40 bg-cyan-950/10 p-3">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-cyan-300">
+            <Target size={14} />
+            Catalogue des marches
+          </div>
+          <p className="mt-1 text-xs text-gray-500">
+            Vision rapide de ce qui est vraiment cote chez les books FR, ce qui vient d'un fallback global, et ce qui reste une projection.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <FilterPill active={scope === "all"} onClick={() => setScope("all")}>
+            Tout ({catalog.length})
+          </FilterPill>
+          <FilterPill active={scope === "fr"} onClick={() => setScope("fr")}>
+            FR ({frCount})
+          </FilterPill>
+          <FilterPill active={scope === "book"} onClick={() => setScope("book")}>
+            Books ({bookCount})
+          </FilterPill>
+          <FilterPill active={scope === "model"} onClick={() => setScope("model")}>
+            Modele/proxy ({modelCount})
+          </FilterPill>
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+        {visible.slice(0, 15).map((entry) => (
+          <MarketCatalogCard key={`${entry.category}-${entry.market}`} entry={entry} />
+        ))}
+      </div>
+
+      {visible.length > 15 && (
+        <div className="mt-2 text-center text-[11px] text-gray-600">
+          {visible.length - 15} autre(s) marche(s) masque(s) pour garder l'ecran lisible.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function marketStatusCopy(status: MatchMarketCatalogEntry["status"]) {
+  if (status === "fr_available") {
+    return {
+      label: "Cote FR dispo",
+      className: "border-emerald-800/70 bg-emerald-950/35 text-emerald-300",
+    };
+  }
+  if (status === "global_available") {
+    return {
+      label: "Fallback book",
+      className: "border-blue-800/60 bg-blue-950/30 text-blue-300",
+    };
+  }
+  if (status === "model_only") {
+    return {
+      label: "Modele",
+      className: "border-gray-700 bg-gray-900 text-gray-300",
+    };
+  }
+  return {
+    label: "Proxy",
+    className: "border-red-900/60 bg-red-950/25 text-red-300",
+  };
+}
+
+function MarketCatalogCard({ entry }: { entry: MatchMarketCatalogEntry }) {
+  const status = marketStatusCopy(entry.status);
+  const best = entry.best_selection;
+
+  return (
+    <div className="rounded-2xl border border-gray-800 bg-gray-900/80 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] uppercase tracking-wide text-gray-600">
+            {entry.category}
+          </div>
+          <div className="mt-0.5 font-semibold text-white">{entry.market}</div>
+        </div>
+        <span className={clsx("shrink-0 rounded-full border px-2 py-1 text-[10px] font-bold", status.className)}>
+          {status.label}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+        <Stat label="FR" value={String(entry.french_bookmaker_selections)} highlight={entry.french_bookmaker_selections ? "green" : undefined} />
+        <Stat label="Book" value={String(entry.global_bookmaker_selections)} />
+        <Stat label="Modele" value={String(entry.model_selections)} />
+        <Stat label="Proxy" value={String(entry.proxy_selections)} highlight={entry.proxy_selections ? "red" : undefined} />
+      </div>
+
+      {best && (
+        <div className="mt-3 rounded-xl border border-gray-800 bg-gray-950/45 p-2">
+          <div className="text-[11px] text-gray-500">Meilleur signal</div>
+          <div className="mt-0.5 text-sm font-semibold text-white line-clamp-1">
+            {best.label}
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-gray-500">
+            <span>{(best.probability * 100).toFixed(1)}%</span>
+            <span>{formatOdds(best.offered_odds || best.fair_odds)}</span>
+            {best.edge != null && (
+              <span className={best.edge > 0 ? "text-green-300" : "text-red-300"}>
+                {best.edge > 0 ? "+" : ""}{(best.edge * 100).toFixed(1)}% edge
+              </span>
+            )}
+            {best.bookmaker && <span>{best.bookmaker}</span>}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {entry.available_bookmakers.slice(0, 4).map((bookmaker) => (
+          <span key={bookmaker} className="rounded-full bg-gray-800 px-2 py-0.5 text-[10px] text-gray-400">
+            {bookmaker}
+          </span>
+        ))}
+        {!entry.available_bookmakers.length && (
+          <span className="rounded-full bg-gray-800 px-2 py-0.5 text-[10px] text-gray-500">
+            aucune cote book
+          </span>
+        )}
+      </div>
+
+      <div className="mt-2 flex items-center justify-between text-[11px] text-gray-600">
+        <span>{entry.total_selections} selection(s)</span>
+        <span>{entry.playable_count} jouable(s)</span>
+        <span>fiab. {entry.average_reliability == null ? "n/a" : `${entry.average_reliability.toFixed(0)}/100`}</span>
+      </div>
+    </div>
   );
 }
 

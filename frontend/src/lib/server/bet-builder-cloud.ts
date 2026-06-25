@@ -4,6 +4,7 @@ import type {
   MatchParlayRequest,
   MatchParlayResponse,
   BetSuggestion,
+  MatchMarketCatalogEntry,
   MarketSignal,
   OddsSnapshot,
   PlayerInsights,
@@ -760,6 +761,110 @@ function finalSuggestionSort(a: BetSuggestion, b: BetSuggestion) {
     (playabilityOrder[b.playability || "surveillance"] ?? 1);
   if (playDelta !== 0) return playDelta;
   return suggestionQualityRank(b) - suggestionQualityRank(a);
+}
+
+function buildMarketCatalog(suggestions: BetSuggestion[]): MatchMarketCatalogEntry[] {
+  const grouped = new Map<string, BetSuggestion[]>();
+  for (const suggestion of suggestions) {
+    const key = `${suggestion.category}|${suggestion.market}`;
+    const entries = grouped.get(key) || [];
+    entries.push(suggestion);
+    grouped.set(key, entries);
+  }
+
+  return [...grouped.entries()]
+    .map(([key, entries]) => {
+      const [category, market] = key.split("|");
+      const french = entries.filter(
+        (suggestion) =>
+          suggestion.source === "bookmaker" &&
+          suggestion.odds_source === "french_bookmaker",
+      );
+      const global = entries.filter(
+        (suggestion) =>
+          suggestion.source === "bookmaker" &&
+          suggestion.odds_source !== "french_bookmaker",
+      );
+      const proxy = entries.filter((suggestion) => suggestion.data_level === "proxy");
+      const model = entries.filter(
+        (suggestion) =>
+          suggestion.source !== "bookmaker" && suggestion.data_level !== "proxy",
+      );
+      const scored = entries
+        .slice()
+        .sort((a, b) => suggestionQualityRank(b) - suggestionQualityRank(a));
+      const best = scored[0];
+      const reliabilityValues = entries
+        .map((suggestion) => suggestion.reliability_score)
+        .filter((value): value is number => typeof value === "number");
+      const status: MatchMarketCatalogEntry["status"] =
+        french.length > 0
+          ? "fr_available"
+          : global.length > 0
+            ? "global_available"
+            : proxy.length > 0 && model.length === 0
+              ? "proxy_only"
+              : "model_only";
+
+      return {
+        category,
+        market,
+        status,
+        total_selections: entries.length,
+        french_bookmaker_selections: french.length,
+        global_bookmaker_selections: global.length,
+        model_selections: model.length,
+        proxy_selections: proxy.length,
+        playable_count: entries.filter((suggestion) => suggestion.playability === "jouable").length,
+        watch_count: entries.filter((suggestion) => suggestion.playability === "surveillance").length,
+        avoid_count: entries.filter((suggestion) => suggestion.playability === "eviter").length,
+        average_reliability: reliabilityValues.length
+          ? round(
+              reliabilityValues.reduce((sum, value) => sum + value, 0) /
+                reliabilityValues.length,
+              1,
+            )
+          : undefined,
+        available_bookmakers: Array.from(
+          new Set(
+            entries
+              .filter((suggestion) => suggestion.source === "bookmaker")
+              .map(
+                (suggestion) =>
+                  suggestion.bookmaker_display ||
+                  suggestion.bookmaker ||
+                  "Bookmaker",
+              ),
+          ),
+        ).slice(0, 6),
+        example_labels: scored.slice(0, 3).map((suggestion) => suggestion.label),
+        best_selection: best
+          ? {
+              label: best.label,
+              probability: best.probability,
+              fair_odds: best.fair_odds,
+              offered_odds: best.offered_odds,
+              bookmaker: best.bookmaker_display || best.bookmaker,
+              odds_source: best.odds_source,
+              edge: best.edge,
+              playability: best.playability,
+              reliability_score: best.reliability_score,
+            }
+          : undefined,
+      };
+    })
+    .sort((a, b) => {
+      const statusWeight = {
+        fr_available: 0,
+        global_available: 1,
+        model_only: 2,
+        proxy_only: 3,
+      } as const;
+      const statusDelta = statusWeight[a.status] - statusWeight[b.status];
+      if (statusDelta !== 0) return statusDelta;
+      if (b.playable_count !== a.playable_count) return b.playable_count - a.playable_count;
+      return (b.average_reliability || 0) - (a.average_reliability || 0);
+    });
 }
 
 function finalizeSuggestions(
@@ -1828,6 +1933,7 @@ export async function getMatchBetBuilder(
     movements,
   );
   const oddsCoverage = summarizeFrenchOddsCoverage(snapshots);
+  const marketCatalog = buildMarketCatalog(suggestions);
 
   return {
     event_id: eventId,
@@ -1839,6 +1945,7 @@ export async function getMatchBetBuilder(
       ...FRENCH_BOOKMAKER_PRIORITY,
       "Fallback: meilleure cote globale si aucune cote FR n'est disponible",
     ],
+    market_catalog: marketCatalog,
     odds_coverage: oddsCoverage,
     warnings: [
       `Couverture FR: ${oddsCoverage.french_markets} marche(s) via ${oddsCoverage.french_bookmakers.join(", ") || "aucun bookmaker FR"}.`,

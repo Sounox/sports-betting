@@ -271,6 +271,7 @@ export interface MatchBetBuilder {
   bookmaker_markets: number;
   model_markets: number;
   preferred_bookmakers: string[];
+  market_catalog?: MatchMarketCatalogEntry[];
   odds_coverage?: {
     availability: "good" | "partial" | "none";
     french_markets: number;
@@ -282,6 +283,34 @@ export interface MatchBetBuilder {
     note: string;
   };
   warnings: string[];
+}
+
+export interface MatchMarketCatalogEntry {
+  category: string;
+  market: string;
+  status: "fr_available" | "global_available" | "model_only" | "proxy_only";
+  total_selections: number;
+  french_bookmaker_selections: number;
+  global_bookmaker_selections: number;
+  model_selections: number;
+  proxy_selections: number;
+  playable_count: number;
+  watch_count: number;
+  avoid_count: number;
+  average_reliability?: number;
+  available_bookmakers: string[];
+  example_labels: string[];
+  best_selection?: {
+    label: string;
+    probability: number;
+    fair_odds: number;
+    offered_odds?: number;
+    bookmaker?: string;
+    odds_source?: "french_bookmaker" | "global_bookmaker" | "model" | "proxy";
+    edge?: number;
+    playability?: "jouable" | "surveillance" | "eviter";
+    reliability_score?: number;
+  };
 }
 
 export interface MatchParlayRequest {
