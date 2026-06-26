@@ -44,6 +44,14 @@ export const api = {
     const q = new URLSearchParams(params as any).toString();
     return apiFetch<RecommendationResponse>(`/api/v1/recommendations?${q}`);
   },
+  getDailyPicks: (params?: { force?: boolean; max_age_hours?: number }) => {
+    const q = new URLSearchParams(params as any).toString();
+    return apiFetch<DailyPicksResponse>(`/api/v1/daily-picks${q ? `?${q}` : ""}`);
+  },
+  refreshDailyPicks: () =>
+    apiFetch<DailyPicksResponse>("/api/v1/daily-picks/refresh", {
+      method: "POST",
+    }),
   getMarketRadar: (params?: MarketRadarRequest) => {
     const q = new URLSearchParams(params as any).toString();
     return apiFetch<MarketRadarResponse>(`/api/v1/recommendations/market-radar?${q}`);
@@ -553,6 +561,30 @@ export interface RecommendationResponse {
     reason: string;
     confidence: string;
   }>;
+  guardrails: string[];
+}
+
+export interface DailyPicksResponse {
+  enabled: boolean;
+  storage: "snapshot" | "fresh" | "live";
+  stale?: boolean;
+  profile: "balanced";
+  generated_at: string;
+  refreshed_at?: string;
+  trigger?: "manual" | "cron" | "auto";
+  message?: string;
+  summary: {
+    upcoming_events: number;
+    singles: number;
+    radar_suggestions: number;
+    parlay_available: boolean;
+    parlay_events_scanned: number;
+    next_auto_refresh_note: string;
+  };
+  recommendations: RecommendationResponse;
+  multi_match_parlay: MatchParlayScanResponse;
+  radar: MarketRadarResponse;
+  warnings: string[];
   guardrails: string[];
 }
 

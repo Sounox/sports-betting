@@ -27,6 +27,16 @@ export default {
       if (!response.ok) {
         throw new Error(`Data refresh failed: ${response.status}`);
       }
+
+      const picksResponse = await fetch(
+        `${origin}/api/v1/daily-picks/refresh?trigger=cron`,
+        {
+          method: "POST",
+        },
+      );
+      if (!picksResponse.ok) {
+        console.warn(`Daily picks refresh failed: ${picksResponse.status}`);
+      }
     };
 
     ctx.waitUntil(refresh());
