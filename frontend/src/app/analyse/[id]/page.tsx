@@ -726,6 +726,77 @@ function explorerSuggestionScore(suggestion: BetSuggestion) {
   return playability + source + reliability + edge + suggestion.probability * 40;
 }
 
+function clampScore(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function buildLegInsight(suggestion: BetSuggestion) {
+  const reliability = suggestion.reliability_score ?? 45;
+  const edge = suggestion.edge;
+  const sourcePoints =
+    suggestion.source === "bookmaker"
+      ? isFrenchSuggestion(suggestion)
+        ? 14
+        : 10
+      : suggestion.data_level === "proxy"
+        ? -10
+        : 4;
+  const edgePoints =
+    edge == null ? 5 : Math.max(-12, Math.min(18, Math.round(edge * 250)));
+  const marketSignalPoints =
+    suggestion.market_signal?.verdict === "favorable"
+      ? 8
+      : suggestion.market_signal?.verdict === "unfavorable"
+        ? -10
+        : 0;
+  const playabilityPoints =
+    suggestion.playability === "jouable"
+      ? 10
+      : suggestion.playability === "surveillance"
+        ? 2
+        : -20;
+  const score = clampScore(
+    boundedProbability(suggestion.probability) * 35 +
+      (reliability / 100) * 25 +
+      edgePoints +
+      sourcePoints +
+      marketSignalPoints +
+      playabilityPoints,
+  );
+  const reasons: string[] = [];
+  const risks: string[] = [];
+
+  if (suggestion.probability >= 0.6) reasons.push("Proba modele forte");
+  else if (suggestion.probability >= 0.45) reasons.push("Proba modele correcte");
+  else risks.push("Proba plus fragile");
+
+  if (reliability >= 70) reasons.push("Donnees solides");
+  else if (reliability >= 55) reasons.push("Fiabilite moyenne");
+  else risks.push("Donnees fragiles");
+
+  if (edge != null && edge > 0.03) reasons.push("Edge positif net");
+  else if (edge != null && edge > 0) reasons.push("Edge legerement positif");
+  else if (edge != null) risks.push("Edge non positif");
+
+  if (suggestion.source === "bookmaker") {
+    reasons.push(isFrenchSuggestion(suggestion) ? "Cote bookmaker FR" : "Cote bookmaker fallback");
+  } else {
+    risks.push(suggestion.data_level === "proxy" ? "Projection proxy" : "Cote modele");
+  }
+
+  if (suggestion.market_signal?.verdict === "favorable") reasons.push("Marche favorable");
+  if (suggestion.market_signal?.verdict === "unfavorable") risks.push("Marche defavorable");
+  if (suggestion.tags.includes("high_variance")) risks.push("Variance elevee");
+
+  return {
+    score,
+    scoreLabel: score >= 75 ? "Fort" : score >= 58 ? "Correct" : "Fragile",
+    reasons: reasons.slice(0, 5),
+    risks: risks.slice(0, 4),
+  };
+}
+
 function BetSuggestionsPanel({
   eventId,
   builder,
@@ -1544,6 +1615,7 @@ function MarketExplorerTicket({
                     <div className="mt-0.5 text-[11px] text-gray-500">
                       {formatOdds(displayedOdds(suggestion))} - proba modele {(suggestion.probability * 100).toFixed(1)}%
                     </div>
+                    <LegInsight suggestion={suggestion} compact />
                   </div>
                   <button
                     type="button"
@@ -1580,6 +1652,61 @@ function MarketExplorerTicket({
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function LegInsight({
+  suggestion,
+  compact = false,
+}: {
+  suggestion: BetSuggestion;
+  compact?: boolean;
+}) {
+  const insight = buildLegInsight(suggestion);
+  return (
+    <div className={clsx("mt-2 rounded-xl border border-gray-800 bg-gray-950/55 p-2", compact && "p-2")}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={clsx(
+            "rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-wide",
+            insight.score >= 75
+              ? "bg-emerald-900/40 text-emerald-300"
+              : insight.score >= 58
+                ? "bg-cyan-900/35 text-cyan-300"
+                : "bg-amber-900/35 text-amber-300",
+          )}
+        >
+          Score {insight.score}/100
+        </span>
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+          {insight.scoreLabel}
+        </span>
+        {!compact && (
+          <span className="text-[10px] text-gray-600">
+            pourquoi retenu
+          </span>
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {insight.reasons.map((reason) => (
+          <span
+            key={reason}
+            className="rounded-full border border-emerald-900/50 bg-emerald-950/20 px-2 py-0.5 text-[10px] text-emerald-200"
+          >
+            {reason}
+          </span>
+        ))}
+        {insight.risks.map((risk) => (
+          <span
+            key={risk}
+            className="rounded-full border border-yellow-900/50 bg-yellow-950/20 px-2 py-0.5 text-[10px] text-yellow-200"
+          >
+            {risk}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -1917,22 +2044,23 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
 
           <div className="space-y-2">
             {result.parlay.legs.map((leg, index) => (
-              <div key={leg.id} className="flex items-center justify-between gap-3 rounded-lg bg-gray-800 px-3 py-2">
-                <div>
+              <div key={leg.id} className="flex flex-col gap-3 rounded-lg bg-gray-800 px-3 py-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
                   <div className="text-sm font-semibold text-white">
                     {index + 1}. {leg.label}
                   </div>
                   <div className="text-xs text-gray-500">
                     Probabilite modele {(leg.probability * 100).toFixed(1)}%
-                    {" "}· {leg.source === "bookmaker" ? leg.bookmaker : "cote modele estimee"}
+                    {" "}- {leg.source === "bookmaker" ? leg.bookmaker : "cote modele estimee"}
                   </div>
+                  <LegInsight suggestion={leg} />
                   {leg.market_signal && (
                     <div className="mt-1">
                       <MarketSignalBadge signal={leg.market_signal} />
                     </div>
                   )}
                 </div>
-                <div className="text-right font-bold text-cyan-300">
+                <div className="shrink-0 text-right font-bold text-cyan-300">
                   {formatOdds(displayedOdds(leg))}
                 </div>
               </div>
