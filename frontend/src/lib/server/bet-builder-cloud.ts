@@ -2,6 +2,7 @@ import type {
   Event,
   MatchBetBuilder,
   MatchParlayRequest,
+  MatchParlayRiskProfile,
   MatchParlayResponse,
   BetSuggestion,
   MatchMarketCatalogEntry,
@@ -27,6 +28,65 @@ import {
 } from "@/lib/server/odds-cloud";
 
 type Impact = BetSuggestion["risk_level"];
+
+type SameMatchParlayProfileConfig = {
+  minProbability: number;
+  minReliability: number;
+  maxLegs: number;
+  maxCandidates: number;
+  correlationPenalty: number;
+  allowLowConfidence: boolean;
+  allowHighVariance: boolean;
+  preferBookmakerOdds: boolean;
+  label: string;
+  warning: string;
+};
+
+const SAME_MATCH_PARLAY_PROFILES: Record<MatchParlayRiskProfile, SameMatchParlayProfileConfig> = {
+  prudent: {
+    minProbability: 0.44,
+    minReliability: 68,
+    maxLegs: 3,
+    maxCandidates: 28,
+    correlationPenalty: 0.84,
+    allowLowConfidence: false,
+    allowHighVariance: false,
+    preferBookmakerOdds: true,
+    label: "prudent",
+    warning: "Profil prudent: seuils de probabilite et fiabilite renforces, nombre de selections limite.",
+  },
+  balanced: {
+    minProbability: 0.32,
+    minReliability: 58,
+    maxLegs: 4,
+    maxCandidates: 38,
+    correlationPenalty: 0.9,
+    allowLowConfidence: false,
+    allowHighVariance: false,
+    preferBookmakerOdds: false,
+    label: "equilibre",
+    warning: "Profil equilibre: compromis entre cote cible, probabilite estimee et fiabilite des donnees.",
+  },
+  aggressive: {
+    minProbability: 0.2,
+    minReliability: 42,
+    maxLegs: 5,
+    maxCandidates: 46,
+    correlationPenalty: 0.92,
+    allowLowConfidence: true,
+    allowHighVariance: true,
+    preferBookmakerOdds: false,
+    label: "agressif",
+    warning: "Profil agressif: variance plus elevee acceptee, mise prudente indispensable.",
+  },
+};
+
+function normalizeParlayProfile(profile?: string): MatchParlayRiskProfile {
+  if (profile === "prudent" || profile === "balanced" || profile === "aggressive") {
+    return profile;
+  }
+  return "balanced";
+}
 
 interface OddsMovementSignal {
   market: string;
@@ -1817,6 +1877,120 @@ function hasConflict(legs: BetSuggestion[], next: BetSuggestion) {
   return false;
 }
 
+function buildProfiledSameMatchParlay(
+  suggestions: BetSuggestion[],
+  request: MatchParlayRequest,
+): MatchParlayResponse["parlay"] | null {
+  const target = Math.max(1.1, request.target_odds);
+  const profile = normalizeParlayProfile(request.risk_profile);
+  const config = SAME_MATCH_PARLAY_PROFILES[profile];
+  const maxLegs = Math.min(request.max_legs || config.maxLegs, config.maxLegs);
+  const scoreCandidate = (suggestion: BetSuggestion) => {
+    const bookmakerBonus = suggestion.offered_odds ? 0.18 : 0;
+    const edgeBonus = Math.max(-0.08, Math.min(0.16, suggestion.edge ?? 0));
+    const reliabilityBonus = ((suggestion.reliability_score ?? 0) / 100) * 0.22;
+    const highVariancePenalty = suggestion.tags.includes("high_variance") ? -0.08 : 0;
+    return (
+      suggestion.probability / oddsForSuggestion(suggestion) +
+      edgeBonus +
+      reliabilityBonus +
+      (config.preferBookmakerOdds ? bookmakerBonus : bookmakerBonus * 0.35) +
+      highVariancePenalty
+    );
+  };
+  const candidates = suggestions
+    .filter(
+      (suggestion) =>
+        suggestion.probability >= config.minProbability &&
+        (config.allowLowConfidence || suggestion.confidence !== "low") &&
+        suggestion.data_level !== "proxy" &&
+        suggestion.playability !== "eviter" &&
+        (suggestion.reliability_score ?? 0) >= config.minReliability &&
+        !hasAdverseMarketSignal(suggestion) &&
+        !suggestion.tags.includes("exact_score") &&
+        !suggestion.tags.includes("proxy_model") &&
+        (config.allowHighVariance || !suggestion.tags.includes("high_variance")) &&
+        (!config.preferBookmakerOdds || Boolean(suggestion.offered_odds)),
+    )
+    .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
+    .slice(0, config.maxCandidates);
+
+  let best: MatchParlayResponse["parlay"] | null = null;
+
+  function isBetterCandidate(
+    candidate: NonNullable<MatchParlayResponse["parlay"]>,
+    current: NonNullable<MatchParlayResponse["parlay"]>,
+  ) {
+    const candidateDistance = Math.max(0, candidate.total_odds - target);
+    const currentDistance = Math.max(0, current.total_odds - target);
+
+    if (profile === "aggressive") {
+      if (Math.abs(candidateDistance - currentDistance) > 0.08) {
+        return candidateDistance < currentDistance;
+      }
+      return candidate.estimated_probability > current.estimated_probability;
+    }
+
+    if (profile === "prudent") {
+      if (Math.abs(candidate.estimated_probability - current.estimated_probability) > 0.003) {
+        return candidate.estimated_probability > current.estimated_probability;
+      }
+      if (candidate.legs.length !== current.legs.length) {
+        return candidate.legs.length < current.legs.length;
+      }
+      return candidate.total_odds < current.total_odds;
+    }
+
+    if (Math.abs(candidate.estimated_probability - current.estimated_probability) > 0.004) {
+      return candidate.estimated_probability > current.estimated_probability;
+    }
+    return candidateDistance < currentDistance;
+  }
+
+  function visit(start: number, legs: BetSuggestion[]) {
+    if (legs.length) {
+      const totalOdds = round(
+        legs.reduce((product, leg) => product * oddsForSuggestion(leg), 1),
+        2,
+      );
+      const probability =
+        legs.reduce((product, leg) => product * leg.probability, 1) *
+        config.correlationPenalty ** Math.max(0, legs.length - 1);
+
+      if (totalOdds >= target) {
+        const candidate = {
+          legs,
+          total_odds: totalOdds,
+          estimated_probability: round(probability),
+          potential_return: request.stake
+            ? round(request.stake * totalOdds, 2)
+            : undefined,
+          warnings: [
+            config.warning,
+            "Combine meme match: les marches sont correles, la probabilite reste approximative.",
+            "Les cotes sans bookmaker indique sont des cotes modele estimees, pas des cotes jouables garanties.",
+          ],
+        };
+        if (!best || isBetterCandidate(candidate, best)) {
+          best = candidate;
+        }
+        return;
+      }
+    }
+
+    if (legs.length >= maxLegs) return;
+
+    for (let i = start; i < candidates.length; i += 1) {
+      const next = candidates[i];
+      if (hasConflict(legs, next)) continue;
+      visit(i + 1, [...legs, next]);
+    }
+  }
+
+  visit(0, []);
+  return best;
+}
+
 function buildSameMatchParlay(
   suggestions: BetSuggestion[],
   request: MatchParlayRequest,
@@ -1961,15 +2135,20 @@ export async function generateSameMatchParlay(
   eventId: number,
   request: MatchParlayRequest,
 ): Promise<MatchParlayResponse> {
+  const riskProfile = normalizeParlayProfile(request.risk_profile);
   const builder = await getMatchBetBuilder(eventId);
   if (!builder) {
-    return { success: false, message: "Match ou prediction indisponible." };
+    return { success: false, risk_profile: riskProfile, message: "Match ou prediction indisponible." };
   }
 
-  const parlay = buildSameMatchParlay(builder.suggestions, request);
+  const parlay = buildProfiledSameMatchParlay(builder.suggestions, {
+    ...request,
+    risk_profile: riskProfile,
+  });
   if (!parlay) {
     return {
       success: false,
+      risk_profile: riskProfile,
       message:
         "Aucun combiné sain ne permet d'atteindre cette cote avec les contraintes actuelles.",
     };
@@ -1978,6 +2157,7 @@ export async function generateSameMatchParlay(
   return {
     success: true,
     target_odds: request.target_odds,
+    risk_profile: riskProfile,
     parlay,
   };
 }

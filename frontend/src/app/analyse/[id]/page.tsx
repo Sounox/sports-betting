@@ -9,6 +9,7 @@ import {
   type MatchBetBuilder,
   type MatchContext,
   type MatchParlayResponse,
+  type MatchParlayRiskProfile,
   type EventOddsHistoryResponse,
   type MarketSignal,
   type MatchMarketCatalogEntry,
@@ -644,6 +645,28 @@ type OddsScope = "fr" | "book" | "model";
 type CatalogScope = "all" | "fr" | "book" | "model";
 type ExplorerScope = "recommended" | "fr" | "book" | "model";
 
+const PARLAY_PROFILE_OPTIONS: {
+  value: MatchParlayRiskProfile;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "prudent",
+    label: "Prudent",
+    description: "Fiabilite renforcee, moins de selections.",
+  },
+  {
+    value: "balanced",
+    label: "Equilibre",
+    description: "Compromis cote cible / probabilite.",
+  },
+  {
+    value: "aggressive",
+    label: "Agressif",
+    description: "Plus de variance, jamais garanti.",
+  },
+];
+
 function suggestionMatchesScope(suggestion: BetSuggestion, scope: OddsScope) {
   if (scope === "fr") {
     return suggestion.source === "bookmaker" && isFrenchSuggestion(suggestion);
@@ -1057,6 +1080,7 @@ function MarketExplorerPanel({
   const [ticketSelectionIds, setTicketSelectionIds] = useState<string[]>([]);
   const [ticketTargetOdds, setTicketTargetOdds] = useState("3.00");
   const [ticketStake, setTicketStake] = useState("");
+  const [ticketRiskProfile, setTicketRiskProfile] = useState<MatchParlayRiskProfile>("balanced");
   const [autoTicketLoading, setAutoTicketLoading] = useState(false);
   const [autoTicketError, setAutoTicketError] = useState("");
   const [autoTicketResult, setAutoTicketResult] = useState<MatchParlayResponse | null>(null);
@@ -1103,7 +1127,8 @@ function MarketExplorerPanel({
       const response = await api.generateSameMatchParlay(eventId, {
         target_odds: targetOdds,
         stake: Number.isFinite(stake) && stake > 0 ? stake : undefined,
-        max_legs: 4,
+        max_legs: ticketRiskProfile === "aggressive" ? 5 : ticketRiskProfile === "prudent" ? 3 : 4,
+        risk_profile: ticketRiskProfile,
       });
       setAutoTicketResult(response);
       if (response.success && response.parlay) {
@@ -1265,8 +1290,14 @@ function MarketExplorerPanel({
             selected={ticketSuggestions}
             targetOdds={ticketTargetOdds}
             stake={ticketStake}
+            riskProfile={ticketRiskProfile}
             onTargetOddsChange={setTicketTargetOdds}
             onStakeChange={setTicketStake}
+            onRiskProfileChange={(profile) => {
+              setAutoTicketResult(null);
+              setAutoTicketError("");
+              setTicketRiskProfile(profile);
+            }}
             autoLoading={autoTicketLoading}
             autoError={autoTicketError}
             autoResult={autoTicketResult}
@@ -1313,8 +1344,10 @@ function MarketExplorerTicket({
   selected,
   targetOdds,
   stake,
+  riskProfile,
   onTargetOddsChange,
   onStakeChange,
+  onRiskProfileChange,
   autoLoading,
   autoError,
   autoResult,
@@ -1325,8 +1358,10 @@ function MarketExplorerTicket({
   selected: BetSuggestion[];
   targetOdds: string;
   stake: string;
+  riskProfile: MatchParlayRiskProfile;
   onTargetOddsChange: (value: string) => void;
   onStakeChange: (value: string) => void;
+  onRiskProfileChange: (value: MatchParlayRiskProfile) => void;
   autoLoading: boolean;
   autoError: string;
   autoResult: MatchParlayResponse | null;
@@ -1358,6 +1393,9 @@ function MarketExplorerTicket({
   const negativeEdgeCount = selected.filter(
     (suggestion) => suggestion.edge != null && suggestion.edge <= 0,
   ).length;
+  const appliedProfile =
+    PARLAY_PROFILE_OPTIONS.find((option) => option.value === (autoResult?.risk_profile || riskProfile)) ||
+    PARLAY_PROFILE_OPTIONS[1];
 
   return (
     <div className="rounded-2xl border border-cyan-900/50 bg-cyan-950/10 p-3">
@@ -1411,6 +1449,33 @@ function MarketExplorerTicket({
               className="w-full rounded-xl border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-white outline-none focus:border-cyan-500"
             />
           </label>
+          <div className="col-span-2 space-y-1 lg:col-span-1">
+            <span className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+              Profil
+            </span>
+            <div className="grid grid-cols-3 gap-1 lg:grid-cols-1">
+              {PARLAY_PROFILE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => onRiskProfileChange(option.value)}
+                  className={clsx(
+                    "rounded-xl border px-2 py-2 text-left transition-colors",
+                    riskProfile === option.value
+                      ? "border-cyan-500/80 bg-cyan-500/15 text-cyan-100"
+                      : "border-gray-800 bg-gray-950 text-gray-500 hover:border-gray-700 hover:text-gray-300",
+                  )}
+                >
+                  <span className="block text-[11px] font-black uppercase tracking-wide">
+                    {option.label}
+                  </span>
+                  <span className="hidden text-[10px] leading-snug lg:block">
+                    {option.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
           <button
             type="button"
             onClick={onAutoGenerate}
@@ -1457,7 +1522,7 @@ function MarketExplorerTicket({
 
           {autoResult?.success && autoResult.parlay && (
             <div className="rounded-xl border border-cyan-800/60 bg-cyan-950/20 p-3 text-xs text-cyan-100">
-              Ticket automatique applique: le backend a choisi {autoResult.parlay.legs.length} selection(s) pour viser {formatOdds(autoResult.target_odds)} avec les contraintes de fiabilite.
+              Ticket automatique {appliedProfile.label.toLowerCase()} applique: le backend a choisi {autoResult.parlay.legs.length} selection(s) pour viser {formatOdds(autoResult.target_odds)} avec les contraintes de fiabilite.
             </div>
           )}
 
@@ -1735,6 +1800,7 @@ function ReliabilityBadge({ suggestion }: { suggestion: BetSuggestion }) {
 function SameMatchParlayPanel({ eventId }: { eventId: number }) {
   const [targetOdds, setTargetOdds] = useState("3.00");
   const [stake, setStake] = useState("");
+  const [riskProfile, setRiskProfile] = useState<MatchParlayRiskProfile>("balanced");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<MatchParlayResponse | null>(null);
   const [error, setError] = useState("");
@@ -1747,7 +1813,8 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
       const response = await api.generateSameMatchParlay(eventId, {
         target_odds: Number(targetOdds),
         stake: stake ? Number(stake) : undefined,
-        max_legs: 4,
+        max_legs: riskProfile === "aggressive" ? 5 : riskProfile === "prudent" ? 3 : 4,
+        risk_profile: riskProfile,
       });
       setResult(response);
       if (!response.success) setError(response.message || "Aucun combine recommande.");
@@ -1770,7 +1837,7 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_auto]">
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Cote cible</label>
           <input
@@ -1803,6 +1870,29 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
         </button>
       </div>
 
+      <div className="grid grid-cols-3 gap-2">
+        {PARLAY_PROFILE_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => {
+              setResult(null);
+              setError("");
+              setRiskProfile(option.value);
+            }}
+            className={clsx(
+              "rounded-xl border px-3 py-2 text-left transition-colors",
+              riskProfile === option.value
+                ? "border-cyan-500/80 bg-cyan-500/15 text-cyan-100"
+                : "border-gray-800 bg-gray-950/70 text-gray-500 hover:border-gray-700 hover:text-gray-300",
+            )}
+          >
+            <span className="block text-xs font-black uppercase tracking-wide">{option.label}</span>
+            <span className="hidden text-[11px] text-gray-500 sm:block">{option.description}</span>
+          </button>
+        ))}
+      </div>
+
       {error && (
         <div className="rounded-xl border border-yellow-900 bg-yellow-950/30 p-3 text-sm text-yellow-200">
           {error}
@@ -1811,10 +1901,14 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
 
       {result?.success && result.parlay && (
         <div className="rounded-xl bg-gray-900/80 border border-cyan-900/60 p-4">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-5">
             <Stat label="Cote visee" value={formatOdds(result.target_odds)} />
             <Stat label="Cote trouvee" value={formatOdds(result.parlay.total_odds)} highlight="green" />
             <Stat label="Reussite approx." value={`${(result.parlay.estimated_probability * 100).toFixed(1)}%`} />
+            <Stat
+              label="Profil"
+              value={PARLAY_PROFILE_OPTIONS.find((option) => option.value === (result.risk_profile || riskProfile))?.label || "Equilibre"}
+            />
             <Stat
               label="Gain potentiel"
               value={result.parlay.potential_return ? `${result.parlay.potential_return.toFixed(2)} EUR` : "n/a"}

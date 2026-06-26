@@ -317,11 +317,15 @@ export interface MatchParlayRequest {
   target_odds: number;
   stake?: number;
   max_legs?: number;
+  risk_profile?: MatchParlayRiskProfile;
 }
+
+export type MatchParlayRiskProfile = "prudent" | "balanced" | "aggressive";
 
 export interface MatchParlayResponse {
   success: boolean;
   target_odds?: number;
+  risk_profile?: MatchParlayRiskProfile;
   message?: string;
   parlay?: {
     legs: BetSuggestion[];
