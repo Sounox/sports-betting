@@ -2,6 +2,9 @@ import type {
   Event,
   MatchBetBuilder,
   MatchParlayRequest,
+  MatchParlayScanLeg,
+  MatchParlayScanRequest,
+  MatchParlayScanResponse,
   MatchParlayRiskProfile,
   MatchParlayResponse,
   BetSuggestion,
@@ -10,7 +13,7 @@ import type {
   OddsSnapshot,
   PlayerInsights,
 } from "@/lib/api";
-import { getMatch } from "@/lib/server/football-cloud";
+import { getMatch, getUpcomingMatches } from "@/lib/server/football-cloud";
 import { getEventOddsHistory } from "@/lib/server/history-cloud";
 import { getPlayerInsights } from "@/lib/server/player-cloud";
 import {
@@ -2185,5 +2188,195 @@ export async function generateSameMatchParlay(
     target_odds: request.target_odds,
     risk_profile: riskProfile,
     parlay,
+  };
+}
+
+export async function generateMultiMatchParlayScanner(
+  request: MatchParlayScanRequest,
+): Promise<MatchParlayScanResponse> {
+  type MultiMatchScanTicket = {
+    legs: MatchParlayScanLeg[];
+    total_odds: number;
+    estimated_probability: number;
+    expected_value: number;
+  };
+
+  const riskProfile = normalizeParlayProfile(request.risk_profile);
+  const config = SAME_MATCH_PARLAY_PROFILES[riskProfile];
+  const target = Math.max(1.1, Number(request.target_odds || 3));
+  const hours = Math.max(1, Math.min(24 * 30, Number(request.hours || 168)));
+  const maxEvents = Math.max(2, Math.min(8, Math.trunc(Number(request.max_events || 6))));
+  const maxLegs = Math.min(Math.max(1, Math.trunc(Number(request.max_legs || config.maxLegs))), config.maxLegs);
+  const events = (await getUpcomingMatches(hours)).slice(0, maxEvents);
+  const candidates: MatchParlayScanLeg[] = [];
+  const scanWarnings = [
+    `Scan limite a ${maxEvents} match(s) pour proteger les quotas gratuits.`,
+    "Les tickets multi-matchs restent probabilistes: aucun gain n'est garanti.",
+  ];
+
+  for (const event of events) {
+    try {
+      const builder = await getMatchBetBuilder(event.id, { includeEventOdds: false });
+      if (!builder) continue;
+      const match = `${event.home_team} vs ${event.away_team}`;
+      const eventCandidates = builder.suggestions
+        .filter(
+          (suggestion) =>
+            suggestion.probability >= config.minProbability &&
+            (config.allowLowConfidence || suggestion.confidence !== "low") &&
+            suggestion.data_level !== "proxy" &&
+            suggestion.playability !== "eviter" &&
+            (suggestion.reliability_score ?? 0) >= config.minReliability &&
+            !hasAdverseMarketSignal(suggestion) &&
+            !suggestion.tags.includes("exact_score") &&
+            !suggestion.tags.includes("proxy_model") &&
+            (config.allowHighVariance || !suggestion.tags.includes("high_variance")) &&
+            (!config.preferBookmakerOdds || Boolean(suggestion.offered_odds)) &&
+            (!request.bookmaker_only || (suggestion.source === "bookmaker" && Boolean(suggestion.offered_odds))) &&
+            (!request.require_french_odds || (suggestion.source === "bookmaker" && Boolean(suggestion.offered_odds) && isFrenchBetSuggestion(suggestion))) &&
+            (!request.exclude_player_props || !isPlayerPropSuggestion(suggestion)),
+        )
+        .sort((a, b) => {
+          const aEdge = a.edge ?? 0;
+          const bEdge = b.edge ?? 0;
+          const aScore =
+            a.probability * 55 +
+            (a.reliability_score ?? 0) / 100 * 24 +
+            Math.max(-0.08, Math.min(0.18, aEdge)) * 100 +
+            (a.offered_odds ? 8 : 0);
+          const bScore =
+            b.probability * 55 +
+            (b.reliability_score ?? 0) / 100 * 24 +
+            Math.max(-0.08, Math.min(0.18, bEdge)) * 100 +
+            (b.offered_odds ? 8 : 0);
+          return bScore - aScore;
+        })
+        .slice(0, 4)
+        .map((suggestion) => ({
+          ...suggestion,
+          event_id: event.id,
+          match,
+          competition: event.competition,
+          scheduled_at: event.scheduled_at,
+        }));
+      candidates.push(...eventCandidates);
+    } catch {
+      scanWarnings.push(`Match ignore: ${event.home_team} vs ${event.away_team}.`);
+    }
+  }
+
+  const pool = candidates
+    .sort((a, b) => {
+      const aEdge = a.edge ?? 0;
+      const bEdge = b.edge ?? 0;
+      return (
+        b.probability * 50 +
+        (b.reliability_score ?? 0) / 100 * 30 +
+        Math.max(-0.08, Math.min(0.18, bEdge)) * 100 -
+        (a.probability * 50 +
+          (a.reliability_score ?? 0) / 100 * 30 +
+          Math.max(-0.08, Math.min(0.18, aEdge)) * 100)
+      );
+    })
+    .slice(0, 28);
+
+  let best: MultiMatchScanTicket | null = null;
+  const minLegs = Math.min(2, maxLegs);
+  const evFloor =
+    riskProfile === "prudent" ? 0 : riskProfile === "aggressive" ? -0.12 : -0.05;
+
+  function isBetter(
+    candidate: NonNullable<typeof best>,
+    current: NonNullable<typeof best>,
+  ) {
+    const candidateDistance = Math.abs(candidate.total_odds - target);
+    const currentDistance = Math.abs(current.total_odds - target);
+    if (riskProfile === "aggressive" && Math.abs(candidateDistance - currentDistance) > 0.08) {
+      return candidateDistance < currentDistance;
+    }
+    if (riskProfile === "prudent") {
+      if (Math.abs(candidate.estimated_probability - current.estimated_probability) > 0.004) {
+        return candidate.estimated_probability > current.estimated_probability;
+      }
+      return candidate.total_odds < current.total_odds;
+    }
+    if (Math.abs(candidate.expected_value - current.expected_value) > 0.015) {
+      return candidate.expected_value > current.expected_value;
+    }
+    return candidateDistance < currentDistance;
+  }
+
+  function visit(index: number, legs: MatchParlayScanLeg[]) {
+    if (legs.length >= minLegs) {
+      const totalOdds = round(
+        legs.reduce((product, leg) => product * oddsForSuggestion(leg), 1),
+        2,
+      );
+      const probability =
+        legs.reduce((product, leg) => product * leg.probability, 1) *
+        0.98 ** Math.max(0, legs.length - 1);
+      const expectedValue = probability * totalOdds - 1;
+      if (totalOdds >= target && expectedValue >= evFloor) {
+        const candidate = {
+          legs,
+          total_odds: totalOdds,
+          estimated_probability: round(probability),
+          expected_value: round(expectedValue),
+        };
+        if (!best || isBetter(candidate, best)) best = candidate;
+        return;
+      }
+    }
+
+    if (legs.length >= maxLegs) return;
+    for (let i = index; i < pool.length; i += 1) {
+      const next = pool[i];
+      if (legs.some((leg) => leg.event_id === next.event_id)) continue;
+      visit(i + 1, [...legs, next]);
+    }
+  }
+
+  visit(0, []);
+
+  const selected = best as MultiMatchScanTicket | null;
+
+  if (!selected) {
+    return {
+      success: false,
+      generated_at: new Date().toISOString(),
+      target_odds: target,
+      risk_profile: riskProfile,
+      events_scanned: events.length,
+      candidates_considered: pool.length,
+      warnings: scanWarnings,
+      message: "Aucun ticket multi-match sain ne respecte ces filtres.",
+    };
+  }
+
+  const activeFilterWarnings = [
+    ...(request.require_french_odds ? ["Filtre actif: cotes FR seulement."] : []),
+    ...(request.bookmaker_only ? ["Filtre actif: modele/proxy exclus."] : []),
+    ...(request.exclude_player_props ? ["Filtre actif: joueurs/buteurs exclus."] : []),
+    ...(maxLegs < config.maxLegs ? [`Filtre actif: maximum ${maxLegs} selection(s).`] : []),
+  ];
+
+  return {
+    success: true,
+    generated_at: new Date().toISOString(),
+    target_odds: target,
+    risk_profile: riskProfile,
+    events_scanned: events.length,
+    candidates_considered: pool.length,
+    warnings: scanWarnings,
+    parlay: {
+      ...selected,
+      potential_return: request.stake ? round(request.stake * selected.total_odds, 2) : undefined,
+      warnings: [
+        config.warning,
+        ...activeFilterWarnings,
+        "Ticket multi-match: correlation plus faible qu'un meme match, mais risque cumule.",
+        "Ne pas augmenter la mise pour compenser une perte.",
+      ],
+    },
   };
 }

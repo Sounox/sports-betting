@@ -29,6 +29,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  scanMultiMatchParlay: (data: MatchParlayScanRequest) =>
+    apiFetch<MatchParlayScanResponse>("/api/v1/parlays/scan", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   getPlayerInsights: (id: number) =>
     apiFetch<PlayerInsights>(`/api/v1/events/${id}/players`),
   getMatchContext: (id: number) =>
@@ -334,6 +339,37 @@ export interface MatchParlayResponse {
     legs: BetSuggestion[];
     total_odds: number;
     estimated_probability: number;
+    potential_return?: number;
+    warnings: string[];
+  };
+}
+
+export interface MatchParlayScanRequest extends MatchParlayRequest {
+  hours?: number;
+  max_events?: number;
+}
+
+export interface MatchParlayScanLeg extends BetSuggestion {
+  event_id: number;
+  match: string;
+  competition: string;
+  scheduled_at: string;
+}
+
+export interface MatchParlayScanResponse {
+  success: boolean;
+  generated_at?: string;
+  target_odds?: number;
+  risk_profile?: MatchParlayRiskProfile;
+  events_scanned?: number;
+  candidates_considered?: number;
+  message?: string;
+  warnings?: string[];
+  parlay?: {
+    legs: MatchParlayScanLeg[];
+    total_odds: number;
+    estimated_probability: number;
+    expected_value: number;
     potential_return?: number;
     warnings: string[];
   };
