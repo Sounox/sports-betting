@@ -318,6 +318,9 @@ export interface MatchParlayRequest {
   stake?: number;
   max_legs?: number;
   risk_profile?: MatchParlayRiskProfile;
+  require_french_odds?: boolean;
+  bookmaker_only?: boolean;
+  exclude_player_props?: boolean;
 }
 
 export type MatchParlayRiskProfile = "prudent" | "balanced" | "aggressive";

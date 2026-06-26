@@ -35,6 +35,9 @@ export async function POST(
       stake: Number.isFinite(stake) ? stake : undefined,
       max_legs: maxLegs,
       risk_profile: riskProfile,
+      require_french_odds: Boolean(body.require_french_odds),
+      bookmaker_only: Boolean(body.bookmaker_only),
+      exclude_player_props: Boolean(body.exclude_player_props),
     });
     return NextResponse.json(result);
   } catch (error) {

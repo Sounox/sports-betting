@@ -1877,6 +1877,22 @@ function hasConflict(legs: BetSuggestion[], next: BetSuggestion) {
   return false;
 }
 
+function isFrenchBetSuggestion(suggestion: BetSuggestion) {
+  return (
+    suggestion.odds_source === "french_bookmaker" ||
+    Boolean(suggestion.is_french_bookmaker) ||
+    Boolean(isFrenchBookmaker(suggestion.bookmaker, suggestion.bookmaker_key))
+  );
+}
+
+function isPlayerPropSuggestion(suggestion: BetSuggestion) {
+  return (
+    suggestion.category.startsWith("Joueurs") ||
+    suggestion.market.toLowerCase().includes("buteur") ||
+    suggestion.tags.some((tag) => tag.startsWith("player_") || tag.includes("scorer"))
+  );
+}
+
 function buildProfiledSameMatchParlay(
   suggestions: BetSuggestion[],
   request: MatchParlayRequest,
@@ -1885,6 +1901,12 @@ function buildProfiledSameMatchParlay(
   const profile = normalizeParlayProfile(request.risk_profile);
   const config = SAME_MATCH_PARLAY_PROFILES[profile];
   const maxLegs = Math.min(request.max_legs || config.maxLegs, config.maxLegs);
+  const activeFilterWarnings = [
+    ...(request.require_french_odds ? ["Filtre actif: seules les cotes bookmakers francais sont autorisees."] : []),
+    ...(request.bookmaker_only ? ["Filtre actif: les cotes modele/proxy sont exclues du ticket automatique."] : []),
+    ...(request.exclude_player_props ? ["Filtre actif: les marches joueurs/buteurs sont exclus."] : []),
+    ...(maxLegs < config.maxLegs ? [`Filtre actif: maximum ${maxLegs} selection(s).`] : []),
+  ];
   const scoreCandidate = (suggestion: BetSuggestion) => {
     const bookmakerBonus = suggestion.offered_odds ? 0.18 : 0;
     const edgeBonus = Math.max(-0.08, Math.min(0.16, suggestion.edge ?? 0));
@@ -1910,7 +1932,10 @@ function buildProfiledSameMatchParlay(
         !suggestion.tags.includes("exact_score") &&
         !suggestion.tags.includes("proxy_model") &&
         (config.allowHighVariance || !suggestion.tags.includes("high_variance")) &&
-        (!config.preferBookmakerOdds || Boolean(suggestion.offered_odds)),
+        (!config.preferBookmakerOdds || Boolean(suggestion.offered_odds)) &&
+        (!request.bookmaker_only || (suggestion.source === "bookmaker" && Boolean(suggestion.offered_odds))) &&
+        (!request.require_french_odds || (suggestion.source === "bookmaker" && Boolean(suggestion.offered_odds) && isFrenchBetSuggestion(suggestion))) &&
+        (!request.exclude_player_props || !isPlayerPropSuggestion(suggestion)),
     )
     .sort((a, b) => scoreCandidate(b) - scoreCandidate(a))
     .slice(0, config.maxCandidates);
@@ -1967,6 +1992,7 @@ function buildProfiledSameMatchParlay(
             : undefined,
           warnings: [
             config.warning,
+            ...activeFilterWarnings,
             "Combine meme match: les marches sont correles, la probabilite reste approximative.",
             "Les cotes sans bookmaker indique sont des cotes modele estimees, pas des cotes jouables garanties.",
           ],

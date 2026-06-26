@@ -645,6 +645,20 @@ type OddsScope = "fr" | "book" | "model";
 type CatalogScope = "all" | "fr" | "book" | "model";
 type ExplorerScope = "recommended" | "fr" | "book" | "model";
 
+type ParlayBuilderFilters = {
+  maxLegs: number;
+  requireFrenchOdds: boolean;
+  bookmakerOnly: boolean;
+  excludePlayerProps: boolean;
+};
+
+const DEFAULT_PARLAY_FILTERS: ParlayBuilderFilters = {
+  maxLegs: 4,
+  requireFrenchOdds: false,
+  bookmakerOnly: false,
+  excludePlayerProps: false,
+};
+
 const PARLAY_PROFILE_OPTIONS: {
   value: MatchParlayRiskProfile;
   label: string;
@@ -666,6 +680,21 @@ const PARLAY_PROFILE_OPTIONS: {
     description: "Plus de variance, jamais garanti.",
   },
 ];
+
+function normalizeMaxLegs(value: number, profile: MatchParlayRiskProfile) {
+  const profileMax = profile === "aggressive" ? 5 : profile === "prudent" ? 3 : 4;
+  if (!Number.isFinite(value)) return profileMax;
+  return Math.max(1, Math.min(profileMax, Math.trunc(value)));
+}
+
+function parlayFilterLabels(filters: ParlayBuilderFilters, profile: MatchParlayRiskProfile) {
+  return [
+    `Max ${normalizeMaxLegs(filters.maxLegs, profile)} selection(s)`,
+    ...(filters.requireFrenchOdds ? ["Cotes FR seulement"] : []),
+    ...(filters.bookmakerOnly ? ["Sans modele/proxy"] : []),
+    ...(filters.excludePlayerProps ? ["Sans joueurs/buteurs"] : []),
+  ];
+}
 
 function suggestionMatchesScope(suggestion: BetSuggestion, scope: OddsScope) {
   if (scope === "fr") {
@@ -1152,6 +1181,7 @@ function MarketExplorerPanel({
   const [ticketTargetOdds, setTicketTargetOdds] = useState("3.00");
   const [ticketStake, setTicketStake] = useState("");
   const [ticketRiskProfile, setTicketRiskProfile] = useState<MatchParlayRiskProfile>("balanced");
+  const [ticketFilters, setTicketFilters] = useState<ParlayBuilderFilters>(DEFAULT_PARLAY_FILTERS);
   const [autoTicketLoading, setAutoTicketLoading] = useState(false);
   const [autoTicketError, setAutoTicketError] = useState("");
   const [autoTicketResult, setAutoTicketResult] = useState<MatchParlayResponse | null>(null);
@@ -1198,8 +1228,11 @@ function MarketExplorerPanel({
       const response = await api.generateSameMatchParlay(eventId, {
         target_odds: targetOdds,
         stake: Number.isFinite(stake) && stake > 0 ? stake : undefined,
-        max_legs: ticketRiskProfile === "aggressive" ? 5 : ticketRiskProfile === "prudent" ? 3 : 4,
+        max_legs: normalizeMaxLegs(ticketFilters.maxLegs, ticketRiskProfile),
         risk_profile: ticketRiskProfile,
+        require_french_odds: ticketFilters.requireFrenchOdds,
+        bookmaker_only: ticketFilters.bookmakerOnly,
+        exclude_player_props: ticketFilters.excludePlayerProps,
       });
       setAutoTicketResult(response);
       if (response.success && response.parlay) {
@@ -1362,12 +1395,25 @@ function MarketExplorerPanel({
             targetOdds={ticketTargetOdds}
             stake={ticketStake}
             riskProfile={ticketRiskProfile}
+            filters={ticketFilters}
             onTargetOddsChange={setTicketTargetOdds}
             onStakeChange={setTicketStake}
             onRiskProfileChange={(profile) => {
               setAutoTicketResult(null);
               setAutoTicketError("");
               setTicketRiskProfile(profile);
+              setTicketFilters((current) => ({
+                ...current,
+                maxLegs: normalizeMaxLegs(current.maxLegs, profile),
+              }));
+            }}
+            onFiltersChange={(nextFilters) => {
+              setAutoTicketResult(null);
+              setAutoTicketError("");
+              setTicketFilters({
+                ...nextFilters,
+                maxLegs: normalizeMaxLegs(nextFilters.maxLegs, ticketRiskProfile),
+              });
             }}
             autoLoading={autoTicketLoading}
             autoError={autoTicketError}
@@ -1416,9 +1462,11 @@ function MarketExplorerTicket({
   targetOdds,
   stake,
   riskProfile,
+  filters,
   onTargetOddsChange,
   onStakeChange,
   onRiskProfileChange,
+  onFiltersChange,
   autoLoading,
   autoError,
   autoResult,
@@ -1430,9 +1478,11 @@ function MarketExplorerTicket({
   targetOdds: string;
   stake: string;
   riskProfile: MatchParlayRiskProfile;
+  filters: ParlayBuilderFilters;
   onTargetOddsChange: (value: string) => void;
   onStakeChange: (value: string) => void;
   onRiskProfileChange: (value: MatchParlayRiskProfile) => void;
+  onFiltersChange: (value: ParlayBuilderFilters) => void;
   autoLoading: boolean;
   autoError: string;
   autoResult: MatchParlayResponse | null;
@@ -1547,6 +1597,61 @@ function MarketExplorerTicket({
               ))}
             </div>
           </div>
+          <div className="col-span-2 space-y-2 rounded-xl border border-gray-800 bg-gray-950/65 p-2 lg:col-span-1">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                Max selections
+              </span>
+              <select
+                value={String(filters.maxLegs)}
+                onChange={(event) =>
+                  onFiltersChange({
+                    ...filters,
+                    maxLegs: Number(event.target.value),
+                  })
+                }
+                className="rounded-lg border border-gray-800 bg-gray-950 px-2 py-1 text-xs text-white outline-none"
+              >
+                {[1, 2, 3, 4, 5].map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <FilterToggle
+              active={filters.requireFrenchOdds}
+              label="Cotes FR seulement"
+              onClick={() =>
+                onFiltersChange({
+                  ...filters,
+                  requireFrenchOdds: !filters.requireFrenchOdds,
+                  bookmakerOnly: filters.requireFrenchOdds ? filters.bookmakerOnly : true,
+                })
+              }
+            />
+            <FilterToggle
+              active={filters.bookmakerOnly}
+              label="Exclure modele/proxy"
+              onClick={() =>
+                onFiltersChange({
+                  ...filters,
+                  bookmakerOnly: !filters.bookmakerOnly,
+                  requireFrenchOdds: filters.bookmakerOnly ? false : filters.requireFrenchOdds,
+                })
+              }
+            />
+            <FilterToggle
+              active={filters.excludePlayerProps}
+              label="Sans joueurs/buteurs"
+              onClick={() =>
+                onFiltersChange({
+                  ...filters,
+                  excludePlayerProps: !filters.excludePlayerProps,
+                })
+              }
+            />
+          </div>
           <button
             type="button"
             onClick={onAutoGenerate}
@@ -1583,6 +1688,14 @@ function MarketExplorerTicket({
               label="Retour"
               value={(backendPotentialReturn ?? potentialReturn) == null ? "n/a" : formatCurrencyEUR(backendPotentialReturn ?? potentialReturn ?? 0)}
             />
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {parlayFilterLabels(filters, riskProfile).map((label) => (
+              <span key={label} className="rounded-full border border-gray-800 bg-gray-950 px-2 py-0.5 text-[10px] text-gray-400">
+                {label}
+              </span>
+            ))}
           </div>
 
           {autoError && (
@@ -1654,6 +1767,32 @@ function MarketExplorerTicket({
         </div>
       </div>
     </div>
+  );
+}
+
+function FilterToggle({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={clsx(
+        "flex w-full items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-left text-[11px] font-semibold transition-colors",
+        active
+          ? "border-cyan-600/60 bg-cyan-500/15 text-cyan-100"
+          : "border-gray-800 bg-gray-950 text-gray-500 hover:border-gray-700 hover:text-gray-300",
+      )}
+    >
+      <span>{label}</span>
+      <span className={clsx("h-2 w-2 rounded-full", active ? "bg-cyan-300" : "bg-gray-700")} />
+    </button>
   );
 }
 
@@ -1928,6 +2067,7 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
   const [targetOdds, setTargetOdds] = useState("3.00");
   const [stake, setStake] = useState("");
   const [riskProfile, setRiskProfile] = useState<MatchParlayRiskProfile>("balanced");
+  const [filters, setFilters] = useState<ParlayBuilderFilters>(DEFAULT_PARLAY_FILTERS);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<MatchParlayResponse | null>(null);
   const [error, setError] = useState("");
@@ -1940,8 +2080,11 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
       const response = await api.generateSameMatchParlay(eventId, {
         target_odds: Number(targetOdds),
         stake: stake ? Number(stake) : undefined,
-        max_legs: riskProfile === "aggressive" ? 5 : riskProfile === "prudent" ? 3 : 4,
+        max_legs: normalizeMaxLegs(filters.maxLegs, riskProfile),
         risk_profile: riskProfile,
+        require_french_odds: filters.requireFrenchOdds,
+        bookmaker_only: filters.bookmakerOnly,
+        exclude_player_props: filters.excludePlayerProps,
       });
       setResult(response);
       if (!response.success) setError(response.message || "Aucun combine recommande.");
@@ -2006,6 +2149,10 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
               setResult(null);
               setError("");
               setRiskProfile(option.value);
+              setFilters((current) => ({
+                ...current,
+                maxLegs: normalizeMaxLegs(current.maxLegs, option.value),
+              }));
             }}
             className={clsx(
               "rounded-xl border px-3 py-2 text-left transition-colors",
@@ -2017,6 +2164,86 @@ function SameMatchParlayPanel({ eventId }: { eventId: number }) {
             <span className="block text-xs font-black uppercase tracking-wide">{option.label}</span>
             <span className="hidden text-[11px] text-gray-500 sm:block">{option.description}</span>
           </button>
+        ))}
+      </div>
+
+      <div className="grid gap-2 rounded-2xl border border-gray-800 bg-gray-950/55 p-3 sm:grid-cols-[160px_1fr_1fr_1fr]">
+        <label className="flex items-center justify-between gap-2 rounded-lg border border-gray-800 bg-gray-950 px-2 py-1.5">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+            Max selections
+          </span>
+          <select
+            value={String(filters.maxLegs)}
+            onChange={(event) =>
+              {
+                setResult(null);
+                setError("");
+                setFilters((current) => ({
+                  ...current,
+                  maxLegs: normalizeMaxLegs(Number(event.target.value), riskProfile),
+                }));
+              }
+            }
+            className="rounded-md border border-gray-800 bg-gray-950 px-2 py-1 text-xs text-white outline-none"
+          >
+            {[1, 2, 3, 4, 5].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        </label>
+        <FilterToggle
+          active={filters.requireFrenchOdds}
+          label="Cotes FR seulement"
+          onClick={() =>
+            {
+              setResult(null);
+              setError("");
+              setFilters((current) => ({
+                ...current,
+                requireFrenchOdds: !current.requireFrenchOdds,
+                bookmakerOnly: current.requireFrenchOdds ? current.bookmakerOnly : true,
+              }));
+            }
+          }
+        />
+        <FilterToggle
+          active={filters.bookmakerOnly}
+          label="Exclure modele/proxy"
+          onClick={() =>
+            {
+              setResult(null);
+              setError("");
+              setFilters((current) => ({
+                ...current,
+                bookmakerOnly: !current.bookmakerOnly,
+                requireFrenchOdds: current.bookmakerOnly ? false : current.requireFrenchOdds,
+              }));
+            }
+          }
+        />
+        <FilterToggle
+          active={filters.excludePlayerProps}
+          label="Sans joueurs/buteurs"
+          onClick={() =>
+            {
+              setResult(null);
+              setError("");
+              setFilters((current) => ({
+                ...current,
+                excludePlayerProps: !current.excludePlayerProps,
+              }));
+            }
+          }
+        />
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {parlayFilterLabels(filters, riskProfile).map((label) => (
+          <span key={label} className="rounded-full border border-gray-800 bg-gray-950 px-2 py-0.5 text-[10px] text-gray-400">
+            {label}
+          </span>
         ))}
       </div>
 
