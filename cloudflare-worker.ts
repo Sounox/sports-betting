@@ -28,6 +28,22 @@ export default {
         throw new Error(`Data refresh failed: ${response.status}`);
       }
 
+      for (const profileId of [
+        "prudent_3",
+        "value_5",
+        "aggressive_10",
+      ]) {
+        const profileResponse = await fetch(
+          `${origin}/api/v1/daily-picks/profiles/${profileId}/refresh`,
+          { method: "POST" },
+        );
+        if (!profileResponse.ok) {
+          console.warn(
+            `Daily profile ${profileId} refresh failed: ${profileResponse.status}`,
+          );
+        }
+      }
+
       const picksResponse = await fetch(
         `${origin}/api/v1/daily-picks/refresh?trigger=cron`,
         {

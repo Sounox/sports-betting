@@ -1,7 +1,10 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import type {
+  DailyPicksParlayProfile,
   DailyPicksResponse,
   MarketRadarResponse,
+  MatchParlayRiskProfile,
+  MatchParlayScanRequest,
   MatchParlayScanResponse,
   RecommendationResponse,
 } from "@/lib/api";
@@ -35,7 +38,69 @@ interface DailyPickSnapshotRow {
   message: string | null;
 }
 
-const PROFILE = "balanced";
+interface DailyParlayProfileSnapshotRow {
+  id: number;
+  profile_id: DailyPicksParlayProfile["id"];
+  generated_at: string;
+  status: DailyPicksParlayProfile["status"];
+  payload_json: string;
+}
+
+const PROFILE = "automated-v2";
+const TICKET_PROFILES: Array<{
+  id: DailyPicksParlayProfile["id"];
+  label: string;
+  description: string;
+  request: MatchParlayScanRequest & {
+    stake: number;
+    risk_profile: MatchParlayRiskProfile;
+    max_legs: number;
+    max_events: number;
+  };
+}> = [
+  {
+    id: "prudent_3",
+    label: "Prudent cote 3",
+    description: "Ticket court, joueurs exclus, seuils de fiabilite stricts.",
+    request: {
+      target_odds: 3,
+      stake: 20,
+      risk_profile: "prudent",
+      max_legs: 3,
+      hours: 168,
+      max_events: 5,
+      exclude_player_props: true,
+    },
+  },
+  {
+    id: "value_5",
+    label: "Value cote 5",
+    description: "Cherche un compromis edge positif, EV et cote totale.",
+    request: {
+      target_odds: 5,
+      stake: 20,
+      risk_profile: "balanced",
+      max_legs: 4,
+      hours: 168,
+      max_events: 6,
+      exclude_player_props: true,
+    },
+  },
+  {
+    id: "aggressive_10",
+    label: "Agressif cote 10",
+    description: "Variance elevee acceptee, mise symbolique recommandee.",
+    request: {
+      target_odds: 10,
+      stake: 10,
+      risk_profile: "aggressive",
+      max_legs: 5,
+      hours: 168,
+      max_events: 5,
+      exclude_player_props: false,
+    },
+  },
+];
 const DAILY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS daily_pick_snapshots (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,6 +115,17 @@ CREATE TABLE IF NOT EXISTS daily_pick_snapshots (
 
 CREATE INDEX IF NOT EXISTS idx_daily_pick_latest
   ON daily_pick_snapshots(profile, generated_at DESC);
+
+CREATE TABLE IF NOT EXISTS daily_parlay_profile_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  profile_id TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  status TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_parlay_profile_latest
+  ON daily_parlay_profile_snapshots(profile_id, generated_at DESC);
 `;
 
 let schemaReady = false;
@@ -122,6 +198,23 @@ function emptyParlay(now: string, message: string): MatchParlayScanResponse {
   };
 }
 
+function emptyProfileParlay(
+  now: string,
+  profile: (typeof TICKET_PROFILES)[number],
+  message: string,
+): MatchParlayScanResponse {
+  return {
+    success: false,
+    generated_at: now,
+    target_odds: profile.request.target_odds,
+    risk_profile: profile.request.risk_profile,
+    events_scanned: 0,
+    candidates_considered: 0,
+    message,
+    warnings: ["Profil automatique non disponible sur ce snapshot."],
+  };
+}
+
 function emptyRadar(now: string): MarketRadarResponse {
   return {
     generated_at: now,
@@ -129,6 +222,189 @@ function emptyRadar(now: string): MarketRadarResponse {
     suggestions: [],
     warnings: ["Radar marche indisponible sur ce snapshot."],
   };
+}
+
+function profileDefinition(profileId: string) {
+  return TICKET_PROFILES.find((profile) => profile.id === profileId) || null;
+}
+
+function profileResult(
+  profile: (typeof TICKET_PROFILES)[number],
+  parlay: MatchParlayScanResponse,
+  status?: DailyPicksParlayProfile["status"],
+): DailyPicksParlayProfile {
+  return {
+    id: profile.id,
+    label: profile.label,
+    description: profile.description,
+    target_odds: profile.request.target_odds,
+    stake: profile.request.stake,
+    risk_profile: profile.request.risk_profile,
+    status:
+      status || (parlay.success && parlay.parlay ? "available" : "refused"),
+    parlay,
+  };
+}
+
+function placeholderProfiles(now: string): DailyPicksParlayProfile[] {
+  return TICKET_PROFILES.map((profile) =>
+    profileResult(
+      profile,
+      emptyProfileParlay(
+        now,
+        profile,
+        "Profil en attente de son prochain scan automatique.",
+      ),
+      "refused",
+    ),
+  );
+}
+
+function parseProfileSnapshot(
+  row: DailyParlayProfileSnapshotRow,
+): DailyPicksParlayProfile | null {
+  try {
+    return JSON.parse(row.payload_json) as DailyPicksParlayProfile;
+  } catch {
+    return null;
+  }
+}
+
+async function loadCachedTicketProfiles(db: D1Database) {
+  const rows = await db
+    .prepare(
+      `SELECT *
+       FROM daily_parlay_profile_snapshots
+       ORDER BY generated_at DESC
+       LIMIT 30`,
+    )
+    .all<DailyParlayProfileSnapshotRow>();
+  const byProfile = new Map<
+    DailyPicksParlayProfile["id"],
+    DailyPicksParlayProfile
+  >();
+  for (const row of rows.results) {
+    if (byProfile.has(row.profile_id)) continue;
+    const parsed = parseProfileSnapshot(row);
+    if (parsed) byProfile.set(row.profile_id, parsed);
+  }
+  return TICKET_PROFILES.map(
+    (profile) =>
+      byProfile.get(profile.id) ||
+      profileResult(
+        profile,
+        emptyProfileParlay(
+          new Date().toISOString(),
+          profile,
+          "Profil en attente de son prochain scan automatique.",
+        ),
+        "refused",
+      ),
+  );
+}
+
+async function saveProfileSnapshot(
+  db: D1Database,
+  profile: DailyPicksParlayProfile,
+) {
+  await db
+    .prepare(
+      `INSERT INTO daily_parlay_profile_snapshots
+        (profile_id, generated_at, status, payload_json)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .bind(
+      profile.id,
+      profile.parlay.generated_at || new Date().toISOString(),
+      profile.status,
+      JSON.stringify(profile),
+    )
+    .run();
+}
+
+async function latestProfileSnapshot(
+  db: D1Database,
+  profileId: DailyPicksParlayProfile["id"],
+) {
+  return db
+    .prepare(
+      `SELECT *
+       FROM daily_parlay_profile_snapshots
+       WHERE profile_id = ?
+       ORDER BY generated_at DESC
+       LIMIT 1`,
+    )
+    .bind(profileId)
+    .first<DailyParlayProfileSnapshotRow>();
+}
+
+export async function refreshDailyParlayProfile(
+  profileId: string,
+): Promise<DailyPicksParlayProfile> {
+  const profile = profileDefinition(profileId);
+  if (!profile) {
+    throw new Error("Profil automatique inconnu.");
+  }
+
+  let result: DailyPicksParlayProfile;
+  try {
+    const parlay = await generateMultiMatchParlayScanner(profile.request);
+    result = profileResult(profile, parlay);
+  } catch {
+    result = profileResult(
+      profile,
+      emptyProfileParlay(
+        new Date().toISOString(),
+        profile,
+        "Scanner multi-match indisponible.",
+      ),
+      "error",
+    );
+  }
+
+  const db = getDb();
+  if (db) {
+    try {
+      await ensureDailySchema(db);
+      await saveProfileSnapshot(db, result);
+    } catch {
+      return result;
+    }
+  }
+  return result;
+}
+
+export async function getDailyParlayProfile(
+  profileId: string,
+  options: { forceRefresh?: boolean; maxAgeHours?: number } = {},
+): Promise<DailyPicksParlayProfile> {
+  const profile = profileDefinition(profileId);
+  if (!profile) {
+    throw new Error("Profil automatique inconnu.");
+  }
+
+  const db = getDb();
+  if (!db) {
+    return refreshDailyParlayProfile(profileId);
+  }
+
+  try {
+    await ensureDailySchema(db);
+    const row = await latestProfileSnapshot(db, profile.id);
+    const parsed = row ? parseProfileSnapshot(row) : null;
+    const maxAgeHours = Math.max(1, Math.min(options.maxAgeHours || 6, 48));
+    const generatedAt = parsed?.parlay.generated_at;
+    const ageHours = generatedAt
+      ? (Date.now() - new Date(generatedAt).getTime()) / 3_600_000
+      : Infinity;
+    if (!options.forceRefresh && parsed && ageHours <= maxAgeHours) {
+      return parsed;
+    }
+  } catch {
+    return refreshDailyParlayProfile(profileId);
+  }
+
+  return refreshDailyParlayProfile(profileId);
 }
 
 function applyStorage(
@@ -145,11 +421,19 @@ function applyStorage(
 
 async function generatePayload(
   trigger: "manual" | "cron" | "auto" = "auto",
+  fallback?: DailyPicksResponse | null,
+  profiles?: DailyPicksParlayProfile[],
 ): Promise<DailyPicksResponse> {
   const now = new Date().toISOString();
   const warnings: string[] = [];
-  const [recommendationsResult, parlayResult, radarResult] =
-    await Promise.allSettled([
+  const parlayProfiles =
+    profiles?.length
+      ? profiles
+      : fallback?.parlay_profiles?.length
+        ? fallback.parlay_profiles
+        : placeholderProfiles(now);
+
+  const [recommendationsResult, radarResult] = await Promise.allSettled([
       getDailyRecommendations({
         hours: 168,
         bankroll: 1000,
@@ -160,41 +444,40 @@ async function generatePayload(
         min_odds: 1.2,
         max_odds: 4,
       }),
-      generateMultiMatchParlayScanner({
-        target_odds: 3,
-        stake: 20,
-        risk_profile: "balanced",
-        max_legs: 4,
-        hours: 168,
-        max_events: 5,
-        exclude_player_props: true,
-      }),
       getMarketRadar({
         hours: 168,
         limit: 3,
         include_proxy: false,
       }),
-    ]);
+  ]);
 
   const recommendations =
     recommendationsResult.status === "fulfilled"
       ? recommendationsResult.value
-      : emptyRecommendations(now);
+      : fallback?.recommendations || emptyRecommendations(now);
+  const primaryProfile =
+    parlayProfiles.find((profile) => profile.id === "value_5" && profile.status === "available") ||
+    parlayProfiles.find((profile) => profile.status === "available");
   const multiMatchParlay =
-    parlayResult.status === "fulfilled"
-      ? parlayResult.value
-      : emptyParlay(now, "Scanner multi-match indisponible.");
+    primaryProfile?.parlay || emptyParlay(now, "Aucun profil automatique disponible.");
   const radar =
-    radarResult.status === "fulfilled" ? radarResult.value : emptyRadar(now);
+    radarResult.status === "fulfilled"
+      ? radarResult.value
+      : fallback?.radar || emptyRadar(now);
 
   if (recommendationsResult.status === "rejected") {
-    warnings.push("Bloc recommandations indisponible sur ce run.");
-  }
-  if (parlayResult.status === "rejected") {
-    warnings.push("Bloc ticket du jour indisponible sur ce run.");
+    warnings.push(
+      fallback?.recommendations
+        ? "Recommandations reprises du dernier snapshot valide."
+        : "Bloc recommandations indisponible sur ce run.",
+    );
   }
   if (radarResult.status === "rejected") {
-    warnings.push("Bloc radar marche indisponible sur ce run.");
+    warnings.push(
+      fallback?.radar
+        ? "Radar repris du dernier snapshot valide."
+        : "Bloc radar marche indisponible sur ce run.",
+    );
   }
 
   return {
@@ -210,12 +493,16 @@ async function generatePayload(
       singles: recommendations.singles.length,
       radar_suggestions: radar.suggestions.length,
       parlay_available: Boolean(multiMatchParlay.success && multiMatchParlay.parlay),
+      parlay_profiles_available: parlayProfiles.filter(
+        (profile) => profile.status === "available",
+      ).length,
       parlay_events_scanned: multiMatchParlay.events_scanned || 0,
       next_auto_refresh_note:
         "Refresh automatique Cloudflare: rapide toutes les 4h, complet toutes les 6h.",
     },
     recommendations,
     multi_match_parlay: multiMatchParlay,
+    parlay_profiles: parlayProfiles,
     radar,
     warnings,
     guardrails: [
@@ -248,6 +535,28 @@ async function latestSnapshot(db: D1Database) {
     .first<DailyPickSnapshotRow>();
 }
 
+async function latestUsefulSnapshot(db: D1Database) {
+  const rows = await db
+    .prepare(
+      `SELECT *
+       FROM daily_pick_snapshots
+       ORDER BY generated_at DESC
+       LIMIT 20`,
+    )
+    .all<DailyPickSnapshotRow>();
+  for (const row of rows.results) {
+    const parsed = parseSnapshot(row);
+    if (
+      parsed &&
+      (parsed.recommendations?.singles?.length > 0 ||
+        parsed.radar?.suggestions?.length > 0)
+    ) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
 async function saveSnapshot(
   db: D1Database,
   payload: DailyPicksResponse,
@@ -275,8 +584,20 @@ export async function refreshDailyPicksSnapshot(options: {
   trigger?: "manual" | "cron" | "auto";
 } = {}): Promise<DailyPicksResponse> {
   const trigger = options.trigger || "manual";
-  const payload = await generatePayload(trigger);
   const db = getDb();
+  let fallback: DailyPicksResponse | null = null;
+  let profiles: DailyPicksParlayProfile[] | undefined;
+  if (db) {
+    try {
+      await ensureDailySchema(db);
+      fallback = await latestUsefulSnapshot(db);
+      profiles = await loadCachedTicketProfiles(db);
+    } catch {
+      fallback = null;
+      profiles = undefined;
+    }
+  }
+  const payload = await generatePayload(trigger, fallback, profiles);
   if (!db) {
     return {
       ...payload,

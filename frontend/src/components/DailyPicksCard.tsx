@@ -11,8 +11,19 @@ import {
   Target,
   Ticket,
 } from "lucide-react";
-import { api, type DailyPicksResponse } from "@/lib/api";
+import {
+  api,
+  type DailyPicksParlayProfile,
+  type DailyPicksProfileId,
+  type DailyPicksResponse,
+} from "@/lib/api";
 import { clsx } from "clsx";
+
+const PROFILE_IDS: DailyPicksProfileId[] = [
+  "prudent_3",
+  "value_5",
+  "aggressive_10",
+];
 
 function pct(value?: number) {
   if (value == null || !Number.isFinite(value)) return "-";
@@ -36,6 +47,7 @@ function dateLabel(value?: string) {
 
 export function DailyPicksCard() {
   const [data, setData] = useState<DailyPicksResponse | null>(null);
+  const [profileData, setProfileData] = useState<DailyPicksParlayProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -43,10 +55,34 @@ export function DailyPicksCard() {
   const load = async (force = false) => {
     setError("");
     try {
-      const response = force
-        ? await api.refreshDailyPicks()
-        : await api.getDailyPicks({ max_age_hours: 6 });
+      let response: DailyPicksResponse;
+      let profileResults: PromiseSettledResult<DailyPicksParlayProfile>[];
+      if (force) {
+        profileResults = await Promise.allSettled(
+          PROFILE_IDS.map((profileId) =>
+            api.refreshDailyParlayProfile(profileId),
+          ),
+        );
+        response = await api.refreshDailyPicks();
+      } else {
+        [response, profileResults] = await Promise.all([
+          api.getDailyPicks({ max_age_hours: 6 }),
+          Promise.allSettled(
+            PROFILE_IDS.map((profileId) =>
+              api.getDailyParlayProfile(profileId, { max_age_hours: 6 }),
+            ),
+          ),
+        ]);
+      }
       setData(response);
+      const loadedProfiles = profileResults.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      setProfileData(
+        loadedProfiles.length
+          ? loadedProfiles
+          : response.parlay_profiles || [],
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Daily picks indisponibles.");
     } finally {
@@ -86,8 +122,28 @@ export function DailyPicksCard() {
   }
 
   const parlay = data.multi_match_parlay.parlay;
+  const profiles =
+    profileData.length
+      ? profileData
+      : data.parlay_profiles && data.parlay_profiles.length
+        ? data.parlay_profiles
+      : [
+          {
+            id: "value_5" as const,
+            label: "Ticket du jour",
+            description: "Profil historique du snapshot.",
+            target_odds: data.multi_match_parlay.target_odds || 3,
+            stake: parlay?.potential_return
+              ? Number((parlay.potential_return / parlay.total_odds).toFixed(2))
+              : 20,
+            risk_profile: data.multi_match_parlay.risk_profile || "balanced" as const,
+            status: data.multi_match_parlay.success && parlay ? "available" as const : "refused" as const,
+            parlay: data.multi_match_parlay,
+          },
+        ];
   const singles = data.recommendations.singles.slice(0, 3);
   const radar = data.radar.suggestions.slice(0, 4);
+  const availableProfiles = profiles.filter((profile) => profile.status === "available").length;
 
   return (
     <section className="rounded-3xl border border-emerald-500/20 bg-gradient-to-br from-gray-950 via-gray-900 to-emerald-950/30 p-4 shadow-2xl shadow-emerald-950/10 sm:p-5">
@@ -123,9 +179,9 @@ export function DailyPicksCard() {
         <Mini label="Singles" value={String(data.summary.singles)} />
         <Mini label="Radar" value={String(data.summary.radar_suggestions)} />
         <Mini
-          label="Ticket"
-          value={data.summary.parlay_available ? "Disponible" : "Refuse"}
-          good={data.summary.parlay_available}
+          label="Tickets"
+          value={`${availableProfiles}/${profiles.length}`}
+          good={availableProfiles > 0}
         />
       </div>
 
@@ -134,48 +190,18 @@ export function DailyPicksCard() {
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-white">
               <Ticket size={17} className="text-emerald-300" />
-              <span className="font-semibold">Ticket du jour</span>
+              <span className="font-semibold">Tickets automatiques</span>
             </div>
             <Link href="/parlays" className="text-xs font-medium text-emerald-300 hover:text-emerald-200">
-              Ouvrir
+              Personnaliser
             </Link>
           </div>
 
-          {data.multi_match_parlay.success && parlay ? (
-            <div className="mt-3 space-y-3">
-              <div className="grid grid-cols-3 gap-2 text-xs">
-                <Mini label="Cote" value={odds(parlay.total_odds)} compact />
-                <Mini label="Proba" value={pct(parlay.estimated_probability)} compact />
-                <Mini
-                  label="EV"
-                  value={`${parlay.expected_value >= 0 ? "+" : ""}${parlay.expected_value.toFixed(3)}`}
-                  compact
-                  good={parlay.expected_value >= 0}
-                />
-              </div>
-              <div className="space-y-2">
-                {parlay.legs.slice(0, 3).map((leg, index) => (
-                  <div key={`${leg.event_id}-${leg.id}-${index}`} className="rounded-xl bg-gray-900/80 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold text-white">{leg.match}</div>
-                        <div className="mt-1 truncate text-xs text-gray-400">{leg.label}</div>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <div className="font-bold text-white">{odds(leg.offered_odds || leg.fair_odds)}</div>
-                        <div className="text-[11px] text-gray-500">{leg.bookmaker_display || leg.bookmaker || "Modele"}</div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="mt-3 rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-sm text-yellow-100">
-              {data.multi_match_parlay.message ||
-                "Aucun ticket sain ne respecte les garde-fous actuels."}
-            </div>
-          )}
+          <div className="mt-3 space-y-3">
+            {profiles.map((profile) => (
+              <TicketProfileCard key={profile.id} profile={profile} />
+            ))}
+          </div>
         </div>
 
         <div className="space-y-4">
@@ -261,6 +287,75 @@ export function DailyPicksCard() {
         </div>
       )}
     </section>
+  );
+}
+
+function TicketProfileCard({
+  profile,
+}: {
+  profile: NonNullable<DailyPicksResponse["parlay_profiles"]>[number];
+}) {
+  const parlay = profile.parlay.parlay;
+  const available = profile.status === "available" && Boolean(parlay);
+
+  return (
+    <div className={clsx(
+      "rounded-2xl border p-3",
+      available ? "border-emerald-500/25 bg-emerald-500/5" : "border-gray-800 bg-gray-900/70",
+    )}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-bold text-white">{profile.label}</h3>
+            <span className={clsx(
+              "rounded-full px-2 py-0.5 text-[11px] font-bold",
+              available ? "bg-emerald-500/15 text-emerald-300" : "bg-yellow-500/10 text-yellow-300",
+            )}>
+              {available ? "disponible" : "refuse"}
+            </span>
+          </div>
+          <p className="mt-1 text-xs leading-5 text-gray-500">{profile.description}</p>
+        </div>
+        <div className="shrink-0 rounded-xl bg-gray-950 px-3 py-2 text-right">
+          <div className="text-[11px] text-gray-500">cible</div>
+          <div className="font-bold text-white">{odds(profile.target_odds)}</div>
+        </div>
+      </div>
+
+      {available && parlay ? (
+        <div className="mt-3 space-y-3">
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <Mini label="Cote" value={odds(parlay.total_odds)} compact good />
+            <Mini label="Proba" value={pct(parlay.estimated_probability)} compact />
+            <Mini
+              label="EV"
+              value={`${parlay.expected_value >= 0 ? "+" : ""}${parlay.expected_value.toFixed(3)}`}
+              compact
+              good={parlay.expected_value >= 0}
+            />
+          </div>
+          <div className="space-y-2">
+            {parlay.legs.slice(0, 2).map((leg, index) => (
+              <div key={`${leg.event_id}-${leg.id}-${index}`} className="rounded-xl bg-gray-950/70 p-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-semibold text-white">{leg.match}</div>
+                    <div className="mt-1 truncate text-[11px] text-gray-400">{leg.label}</div>
+                  </div>
+                  <div className="shrink-0 text-right text-xs font-bold text-white">
+                    {odds(leg.offered_odds || leg.fair_odds)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-3 text-xs leading-5 text-yellow-100">
+          {profile.parlay.message || "Aucun ticket sain ne respecte ce profil."}
+        </div>
+      )}
+    </div>
   );
 }
 

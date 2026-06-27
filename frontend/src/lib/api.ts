@@ -52,6 +52,20 @@ export const api = {
     apiFetch<DailyPicksResponse>("/api/v1/daily-picks/refresh", {
       method: "POST",
     }),
+  getDailyParlayProfile: (
+    profileId: DailyPicksProfileId,
+    params?: { force?: boolean; max_age_hours?: number },
+  ) => {
+    const q = new URLSearchParams(params as any).toString();
+    return apiFetch<DailyPicksParlayProfile>(
+      `/api/v1/daily-picks/profiles/${profileId}${q ? `?${q}` : ""}`,
+    );
+  },
+  refreshDailyParlayProfile: (profileId: DailyPicksProfileId) =>
+    apiFetch<DailyPicksParlayProfile>(
+      `/api/v1/daily-picks/profiles/${profileId}/refresh`,
+      { method: "POST" },
+    ),
   getMarketRadar: (params?: MarketRadarRequest) => {
     const q = new URLSearchParams(params as any).toString();
     return apiFetch<MarketRadarResponse>(`/api/v1/recommendations/market-radar?${q}`);
@@ -568,7 +582,7 @@ export interface DailyPicksResponse {
   enabled: boolean;
   storage: "snapshot" | "fresh" | "live";
   stale?: boolean;
-  profile: "balanced";
+  profile: string;
   generated_at: string;
   refreshed_at?: string;
   trigger?: "manual" | "cron" | "auto";
@@ -578,14 +592,32 @@ export interface DailyPicksResponse {
     singles: number;
     radar_suggestions: number;
     parlay_available: boolean;
+    parlay_profiles_available?: number;
     parlay_events_scanned: number;
     next_auto_refresh_note: string;
   };
   recommendations: RecommendationResponse;
   multi_match_parlay: MatchParlayScanResponse;
+  parlay_profiles?: DailyPicksParlayProfile[];
   radar: MarketRadarResponse;
   warnings: string[];
   guardrails: string[];
+}
+
+export type DailyPicksProfileId =
+  | "prudent_3"
+  | "value_5"
+  | "aggressive_10";
+
+export interface DailyPicksParlayProfile {
+  id: DailyPicksProfileId;
+  label: string;
+  description: string;
+  target_odds: number;
+  stake: number;
+  risk_profile: MatchParlayRiskProfile;
+  status: "available" | "refused" | "error";
+  parlay: MatchParlayScanResponse;
 }
 
 export interface MarketRadarRequest {
