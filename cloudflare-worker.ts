@@ -16,10 +16,31 @@ export default {
     const origin =
       env.PUBLIC_APP_URL || "https://sports-betting.abl-slancry.workers.dev";
 
+    const callInternal = async (path: string, init: RequestInit = {}) => {
+      const startedAt = Date.now();
+      const response = await openNextHandler.fetch(
+        new Request(new URL(path, origin), init),
+        env,
+        ctx,
+      );
+      console.log("[cron] internal route completed", {
+        path,
+        status: response.status,
+        duration_ms: Date.now() - startedAt,
+      });
+      return response;
+    };
+
     const refresh = async () => {
       const mode = controller.cron === "15 */6 * * *" ? "full" : "fast";
-      const response = await fetch(
-        `${origin}/api/v1/admin/data-refresh?mode=${mode}&trigger=cron&hours=168`,
+      console.log("[cron] refresh started", {
+        cron: controller.cron,
+        mode,
+        scheduled_time: new Date(controller.scheduledTime).toISOString(),
+      });
+
+      const response = await callInternal(
+        `/api/v1/admin/data-refresh?mode=${mode}&trigger=cron&hours=168`,
         {
           method: "POST",
         },
@@ -33,8 +54,8 @@ export default {
         "value_5",
         "aggressive_10",
       ]) {
-        const profileResponse = await fetch(
-          `${origin}/api/v1/daily-picks/profiles/${profileId}/refresh`,
+        const profileResponse = await callInternal(
+          `/api/v1/daily-picks/profiles/${profileId}/refresh`,
           { method: "POST" },
         );
         if (!profileResponse.ok) {
@@ -44,8 +65,8 @@ export default {
         }
       }
 
-      const picksResponse = await fetch(
-        `${origin}/api/v1/daily-picks/refresh?trigger=cron`,
+      const picksResponse = await callInternal(
+        "/api/v1/daily-picks/refresh?trigger=cron",
         {
           method: "POST",
         },
@@ -54,14 +75,27 @@ export default {
         console.warn(`Daily picks refresh failed: ${picksResponse.status}`);
       }
 
-      const alertsResponse = await fetch(`${origin}/api/v1/alerts/scan`, {
+      const alertsResponse = await callInternal("/api/v1/alerts/scan", {
         method: "POST",
       });
       if (!alertsResponse.ok) {
         console.warn(`Automated alerts scan failed: ${alertsResponse.status}`);
       }
+
+      console.log("[cron] refresh completed", {
+        cron: controller.cron,
+        mode,
+      });
     };
 
-    ctx.waitUntil(refresh());
+    ctx.waitUntil(
+      refresh().catch((error) => {
+        console.error("[cron] refresh failed", {
+          cron: controller.cron,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }),
+    );
   },
 } satisfies ExportedHandler<Env>;
