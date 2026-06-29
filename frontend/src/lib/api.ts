@@ -66,6 +66,17 @@ export const api = {
       `/api/v1/daily-picks/profiles/${profileId}/refresh`,
       { method: "POST" },
     ),
+  getAutomatedAlerts: (limit = 30) =>
+    apiFetch<AutomatedAlertsResponse>(`/api/v1/alerts?limit=${limit}`),
+  scanAutomatedAlerts: () =>
+    apiFetch<AutomatedAlertsResponse>("/api/v1/alerts/scan", {
+      method: "POST",
+    }),
+  markAutomatedAlertsRead: (input: { id?: number; all?: boolean }) =>
+    apiFetch<AutomatedAlertsResponse>("/api/v1/alerts", {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
   getMarketRadar: (params?: MarketRadarRequest) => {
     const q = new URLSearchParams(params as any).toString();
     return apiFetch<MarketRadarResponse>(`/api/v1/recommendations/market-radar?${q}`);
@@ -618,6 +629,38 @@ export interface DailyPicksParlayProfile {
   risk_profile: MatchParlayRiskProfile;
   status: "available" | "refused" | "error";
   parlay: MatchParlayScanResponse;
+}
+
+export interface AutomatedAlert {
+  id: number;
+  type: "new_value" | "french_odds" | "strong_move";
+  severity: "info" | "medium" | "high";
+  event_id: number;
+  match: string;
+  scheduled_at?: string;
+  market: string;
+  selection: string;
+  bookmaker?: string;
+  odds?: number;
+  previous_odds?: number;
+  edge?: number;
+  title: string;
+  message: string;
+  href: string;
+  created_at: string;
+  expires_at?: string;
+  read: boolean;
+}
+
+export interface AutomatedAlertsResponse {
+  enabled: boolean;
+  generated_at: string;
+  unread_count: number;
+  scanned_candidates?: number;
+  inserted_alerts?: number;
+  alerts: AutomatedAlert[];
+  message?: string;
+  guardrail: string;
 }
 
 export interface MarketRadarRequest {

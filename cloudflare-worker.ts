@@ -53,6 +53,13 @@ export default {
       if (!picksResponse.ok) {
         console.warn(`Daily picks refresh failed: ${picksResponse.status}`);
       }
+
+      const alertsResponse = await fetch(`${origin}/api/v1/alerts/scan`, {
+        method: "POST",
+      });
+      if (!alertsResponse.ok) {
+        console.warn(`Automated alerts scan failed: ${alertsResponse.status}`);
+      }
     };
 
     ctx.waitUntil(refresh());

@@ -4,6 +4,7 @@ import { api, type Event } from "@/lib/api";
 import { MatchCard } from "@/components/MatchCard";
 import { DataFreshnessCard } from "@/components/DataFreshnessCard";
 import { DailyPicksCard } from "@/components/DailyPicksCard";
+import { AlertCenter } from "@/components/AlertCenter";
 import { RefreshCw, Calendar } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
@@ -48,6 +49,8 @@ export default function HomePage() {
       </div>
 
       <DataFreshnessCard compact onAfterRefresh={load} />
+
+      <AlertCenter />
 
       <DailyPicksCard />
 
